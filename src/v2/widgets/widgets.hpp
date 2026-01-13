@@ -17,19 +17,21 @@ namespace fanta {
 
 // Layout helpers
 inline void Row() {
-    if (g_ctx && g_ctx->current_id != INVALID_NODE) {
+    FANTA_ASSERT_CONTEXT();
+    if (g_ctx->current_id != INVALID_NODE) {
         g_ctx->get(g_ctx->current_id).layout().dir = LayoutDir::Row;
     }
 }
 
 inline void Column() {
-    if (g_ctx && g_ctx->current_id != INVALID_NODE) {
+    FANTA_ASSERT_CONTEXT();
+    if (g_ctx->current_id != INVALID_NODE) {
         g_ctx->get(g_ctx->current_id).layout().dir = LayoutDir::Column;
     }
 }
 
 inline void Spacer(float size = 0) {
-    if (!g_ctx) return;
+    FANTA_ASSERT_CONTEXT();
     NodeID id = g_ctx->begin_node("spacer");
     NodeHandle n = g_ctx->get(id);
     if (size > 0) {
@@ -43,7 +45,7 @@ inline void Spacer(float size = 0) {
 
 // Panel/Group
 inline NodeID BeginPanel(const char* id) {
-    if (!g_ctx) return INVALID_NODE;
+    FANTA_ASSERT_CONTEXT();
     NodeID nid = g_ctx->begin_node(id);
     NodeHandle n = g_ctx->get(nid);
     n.style().bg = Color::Hex(0x1A1A1AFF);
@@ -52,7 +54,8 @@ inline NodeID BeginPanel(const char* id) {
 }
 
 inline void EndPanel() {
-    if (g_ctx) g_ctx->end_node();
+    FANTA_ASSERT_CONTEXT();
+    g_ctx->end_node();
 }
 
 } // namespace fanta

@@ -26,6 +26,12 @@
 #define GL_FRAGMENT_SHADER 0x8B30
 #define GL_COMPILE_STATUS 0x8B81
 #define GL_LINK_STATUS 0x8B82
+
+// Stub GL functions when not linking against real OpenGL
+// In real usage, these come from GLAD/GLEW
+inline void glEnable(unsigned int) {}
+inline void glDisable(unsigned int) {}
+inline void glScissor(int, int, int, int) {}
 #endif
 
 namespace fanta {
@@ -114,12 +120,46 @@ void OpenGLBackend::render(const DrawList& list, Font* font) {
 }
 
 void OpenGLBackend::render_layer(const std::vector<DrawCmd>& cmds, Font* font) {
-    // TODO: Batch and render commands
-    // This is a placeholder - real implementation would:
-    // 1. Sort by texture
-    // 2. Build vertex buffer
-    // 3. Issue draw calls with appropriate uniforms
-    (void)cmds;
+    if (cmds.empty()) return;
+    
+    // Simplest immediate mode renderer for verification
+    // In production: Batching is mandatory
+    
+    Rect current_scissor = {-1, -1, -1, -1};
+    glEnable(GL_SCISSOR_TEST);
+    
+    // We assume backend setup (viewport) is correct
+    // Note: OpenGL Scissor is lower-left origin, but our UI is top-left
+    // Need to flip Y: sc_y = height - (y + h)
+    
+    for (const auto& cmd : cmds) {
+        // Update Scissor if changed
+        // Check if clip changed
+        if (cmd.cx != current_scissor.x || cmd.cy != current_scissor.y || 
+            cmd.cw != current_scissor.w || cmd.ch != current_scissor.h) {
+            
+            int screen_h = height_; // Backend window height
+            int sc_x = (int)cmd.cx;
+            int sc_y = screen_h - (int)(cmd.cy + cmd.ch);
+            int sc_w = (int)cmd.cw;
+            int sc_h = (int)cmd.ch;
+            
+            if (sc_w < 0) sc_w = 0;
+            if (sc_h < 0) sc_h = 0;
+            
+            glScissor(sc_x, sc_y, sc_w, sc_h);
+            
+            current_scissor = Rect{cmd.cx, cmd.cy, cmd.cw, cmd.ch};
+        }
+        
+        // Draw Command...
+        // For verification, we just print or do nothing if no real GL linked
+        // In real backend:
+        // if (cmd.type == DrawType::Rect) draw_rect(...)
+    }
+    
+    glDisable(GL_SCISSOR_TEST);
+    
     (void)font;
 }
 

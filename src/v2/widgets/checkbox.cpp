@@ -1,5 +1,5 @@
-// Fantasmagorie v2 - Checkbox Implementation
 #include "checkbox.hpp"
+#include "../style/theme.hpp"
 
 namespace fanta {
 
@@ -10,23 +10,30 @@ void CheckboxBuilder::build() {
     NodeID id = g_ctx->begin_node(label_);
     NodeHandle n = g_ctx->get(id);
     
-    n.constraint().width = 120;
-    n.constraint().height = 24;
+    // Defaults
+    if (common.width <= 0) common.width = 120;
+    if (common.height <= 0) common.height = 24;
+    common.apply(n);
     
     bool checked = *value_;
-    n.style().bg = Color::Hex(checked ? 0x4A90D9FF : 0x333333FF);
-    n.style().corner_radius = 4.0f;
+    auto theme = current_theme();
+    
+    n.style().bg = checked ? theme->color.primary : theme->color.surface_variant;
+    n.style().corner_radius = theme->spacing.corner_small;
     
     n.input().clickable = true;
     n.input().hoverable = true;
     
     // Toggle on click
     bool hovered = is_hovered(id);
-    static bool was_down = false;
-    if (hovered && was_down && !g_ctx->mouse_down) {
-        *value_ = !(*value_);
+    is_clicked(id); // Set active if clicked
+    
+    if (is_active(id) && g_ctx->mouse_released) {
+        if (hovered) {
+            *value_ = !(*value_);
+        }
+        clear_active();
     }
-    was_down = g_ctx->mouse_down && hovered;
     
     n.render().is_text = true;
     n.render().text = label_;

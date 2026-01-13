@@ -31,6 +31,14 @@ public:
     Vec2 mouse_pos;
     Vec2 mouse_delta;
     bool mouse_down = false;
+    bool mouse_clicked = false;  // True on frame mouse went down
+    bool mouse_released = false; // True on frame mouse went up
+    
+    NodeID hot_id = INVALID_NODE;    // Node under mouse
+    NodeID active_id = INVALID_NODE; // Node currently capturing input
+    NodeID focused_id = INVALID_NODE; // Node receiving keyboard input
+    bool prev_mouse_down = false;
+    
     float scroll_delta = 0;
     std::vector<unsigned int> input_chars;
     std::vector<int> input_keys;
@@ -40,7 +48,8 @@ public:
     std::vector<Transform> transform_stack;
     
     // Previous Frame (for animations/persistence)
-    std::unordered_map<NodeID, LayoutData> prev_layout;
+    std::map<NodeID, LayoutData> prev_layout;
+    std::vector<NodeID> prev_nodes; // Creation order from last frame
     
     // Animation State
     struct AnimState { float value = 0; bool initialized = false; };
@@ -48,6 +57,10 @@ public:
     
     // Font
     Font* font = nullptr;
+
+    // Debug State
+    NodeID debug_hover_id = INVALID_NODE; // Node currently hovered in Inspector
+    bool show_layout_bounds = false;      // Toggle for layout visualization
     
     // ========================================================================
     // API
@@ -59,6 +72,9 @@ public:
     
     void begin_frame();
     void end_frame();
+    
+    // Process implicit animations
+    void update_visuals(float dt);
     
     NodeID begin_node(const char* id);
     void end_node();

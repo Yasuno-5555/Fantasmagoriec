@@ -1,5 +1,6 @@
 // Fantasmagorie v2 - Button Implementation
 #include "button.hpp"
+#include "../style/theme.hpp"
 
 namespace fanta {
 
@@ -11,35 +12,42 @@ void ButtonBuilder::build() {
     NodeID id = g_ctx->begin_node(label_);
     NodeHandle n = g_ctx->get(id);
     
-    // Constraints
-    if (width_ > 0) n.constraint().width = width_;
-    else n.constraint().width = 80;  // Default
-    if (height_ > 0) n.constraint().height = height_;
-    else n.constraint().height = 32;
+    // Apply common properties (constraints + implicit animations)
+    // Default size if not set
+    if (common.width <= 0) common.width = 80;
+    if (common.height <= 0) common.height = 32;
+    common.focusable = true;
+    
+    common.apply(n);
     
     // Style based on variant
-    uint32_t bg = 0x333333FF;
-    uint32_t bg_hover = 0x444444FF;
-    uint32_t bg_active = 0x222222FF;
+    auto theme = current_theme();
+    Color bg = theme->color.surface_variant;
+    Color bg_hover = theme->color.secondary; 
+    Color bg_active = theme->color.primary;
     
     if (is_primary_) {
-        bg = 0x4A90D9FF;
-        bg_hover = 0x5AA0E9FF;
-        bg_active = 0x3A80C9FF;
+        bg = theme->color.primary;
+        bg_hover = theme->color.primary; // Should lighten in future
+        bg_active = theme->color.primary; // Should darken
     } else if (is_danger_) {
-        bg = 0xD94A4AFF;
-        bg_hover = 0xE95A5AFF;
-        bg_active = 0xC93A3AFF;
+        bg = theme->color.error;
     }
     
     // Interaction state
     bool hovered = is_hovered(id);
-    bool clicked = is_clicked(id);
+    bool pressed = is_active(id) && g_ctx->mouse_down;
     
     // Apply style
-    n.style().bg = Color::Hex(clicked ? bg_active : (hovered ? bg_hover : bg));
-    n.style().corner_radius = 4.0f;
-    n.style().text = Color::White();
+    n.style().bg = pressed ? bg_active : (hovered ? bg_hover : bg);
+    n.style().corner_radius = theme->spacing.corner_medium;
+    n.style().text = theme->color.fg;
+    
+    if (theme->effect.enable_shadows) {
+        n.style().shadow.color = Color::Hex(0x00000040);
+        n.style().shadow.blur_radius = theme->effect.shadow_radius_base;
+        n.style().shadow.offset_y = 2.0f;
+    }
     
     // Input
     n.input().clickable = true;
@@ -49,12 +57,13 @@ void ButtonBuilder::build() {
     n.render().is_text = true;
     n.render().text = label_;
     
-    // Handle click (on release)
-    static bool was_down = false;
-    if (hovered && was_down && !g_ctx->mouse_down && on_click_) {
-        on_click_();
+    // Handle click (on release if it was started on this button)
+    if (is_active(id) && g_ctx->mouse_released) {
+        if (hovered && on_click_) {
+            on_click_();
+        }
+        clear_active();
     }
-    was_down = g_ctx->mouse_down && hovered;
     
     g_ctx->end_node();
 }

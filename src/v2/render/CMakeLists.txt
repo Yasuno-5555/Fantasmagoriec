@@ -4,6 +4,8 @@ cmake_minimum_required(VERSION 3.16)
 # Render library
 add_library(fanta_render STATIC
     opengl/backend_gl.cpp
+    renderer.cpp
+    draw_icon.cpp
 )
 
 target_include_directories(fanta_render PUBLIC

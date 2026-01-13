@@ -13,6 +13,12 @@ class LabelBuilder {
 public:
     explicit LabelBuilder(const char* text) : text_(text) {}
     
+    // Composition helpers
+    LabelBuilder& width(float w) { common.set_width(w); return *this; }
+    LabelBuilder& height(float h) { common.set_height(h); return *this; }
+    LabelBuilder& padding(float p) { common.set_padding(p); return *this; }
+    
+    // Widget specific
     LabelBuilder& color(uint32_t c) { color_ = c; return *this; }
     LabelBuilder& bold() { bold_ = true; return *this; }
     
@@ -21,6 +27,8 @@ public:
     
 private:
     const char* text_;
+    WidgetCommon common;
+    
     uint32_t color_ = 0xFFFFFFFF;
     bool bold_ = false;
     bool built_ = false;

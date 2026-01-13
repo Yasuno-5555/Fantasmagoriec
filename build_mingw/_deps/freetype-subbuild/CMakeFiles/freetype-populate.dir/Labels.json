@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/CMakeFiles/freetype-populate"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/CMakeFiles/freetype-populate.rule"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/CMakeFiles/freetype-populate-complete.rule"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/freetype-populate-prefix/src/freetype-populate-stamp/freetype-populate-build.rule"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/freetype-populate-prefix/src/freetype-populate-stamp/freetype-populate-configure.rule"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/freetype-populate-prefix/src/freetype-populate-stamp/freetype-populate-download.rule"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/freetype-populate-prefix/src/freetype-populate-stamp/freetype-populate-install.rule"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/freetype-populate-prefix/src/freetype-populate-stamp/freetype-populate-mkdir.rule"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/freetype-populate-prefix/src/freetype-populate-stamp/freetype-populate-patch.rule"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/freetype-populate-prefix/src/freetype-populate-stamp/freetype-populate-test.rule"
+		},
+		{
+			"file" : "/mnt/e/Projects/Fantasmagoriec/build_mingw/_deps/freetype-subbuild/freetype-populate-prefix/src/freetype-populate-stamp/freetype-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"freetype-populate"
+		],
+		"name" : "freetype-populate"
+	}
+}

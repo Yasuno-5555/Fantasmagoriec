@@ -2,10 +2,15 @@
 cmake_minimum_required(VERSION 3.16)
 
 add_library(fanta_widgets STATIC
+    widget_base.cpp
     button.cpp
     label.cpp
     slider.cpp
     checkbox.cpp
+    icon.cpp
+    scroll_panel.cpp
+    popup.cpp
+    theme_editor.cpp
 )
 
 target_include_directories(fanta_widgets PUBLIC

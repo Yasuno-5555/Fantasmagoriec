@@ -12,9 +12,9 @@ void TableBuilder::build() {
     
     apply_constraints(n);
     
-    n.style().bg = Color::Hex(0x1A1A1AFF);
-    n.style().border = Color::Hex(0x333333FF);
-    n.style().border_width = 1.0f;
+    n.style().bg = current_theme()->color.bg;
+    n.style().border.color = current_theme()->color.border;
+    n.style().border.width = 1.0f;
     n.layout().dir = LayoutDir::Column;
     
     float total_width = 0;

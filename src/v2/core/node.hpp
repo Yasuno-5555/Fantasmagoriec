@@ -3,9 +3,10 @@
 #pragma once
 
 #include "types.hpp"
-#include <unordered_map>
+#include "types.hpp"
 #include <vector>
 #include <string>
+#include <map>
 
 namespace fanta {
 
@@ -23,9 +24,12 @@ struct NodeTree {
 struct LayoutConstraints {
     float width = -1.0f;   // -1 = Auto
     float height = -1.0f;
+    float min_width = 0.0f;
+    float min_height = 0.0f;
     float grow = 0.0f;
     float shrink = 1.0f;
     float padding = 0.0f;
+    float gap = 0.0f;      // Space between children
     
     // Positioning
     enum class Position { Relative, Absolute };
@@ -44,28 +48,90 @@ struct LayoutData {
     float x = 0, y = 0, w = 0, h = 0;
 };
 
+// Visual Primitives
+struct Shadow {
+    Color color = Color::Transparent();
+    float offset_x = 0.0f;
+    float offset_y = 0.0f;
+    float blur_radius = 0.0f; // Gaussian blur radius
+    float spread = 0.0f;      // Expansion of the shadow rect
+};
+
+struct Border {
+    Color color = Color::Transparent();
+    Color color_light = Color::Transparent(); // Top/Left (if alpha=0, uses color)
+    Color color_dark = Color::Transparent();  // Bottom/Right (if alpha=0, uses color)
+    float width = 0.0f;
+};
+
+enum class Easing {
+    Linear,
+    EaseOut,   // Cubic Out
+    EaseInOut  // Cubic InOut
+};
+
+struct AnimationConfig {
+    float duration = 0.12f; // Seconds
+    Easing easing = Easing::EaseOut;
+};
+
+enum class InteractionState {
+    Default = 0,
+    Hover = 1,
+    Active = 2,
+    Focused = 3,
+    Disabled = 4
+};
+
 // Visual Style
 struct ResolvedStyle {
     Color bg = Color::Transparent();
-    Color bg_hover = Color::Transparent();
-    Color bg_active = Color::Transparent();
+    Color bg_hover = Color::Transparent(); // Deprecated: implicit animations prefer explicit state overrides
+    Color bg_active = Color::Transparent(); // Deprecated
     Color text = Color::White();
-    Color border = Color::Transparent();
+    
+    Border border;
+    Shadow shadow;
     
     float corner_radius = 0.0f;
-    float border_width = 0.0f;
+    float scale = 1.0f; // Visual scale transformation
     
     // Focus
     bool show_focus_ring = false;
     Color focus_ring_color = Color::Hex(0x4A90D9FF);
     float focus_ring_width = 2.0f;
     
-    // Shadow (Optional)
-    Color shadow = Color::Transparent();
-    float shadow_offset_x = 0, shadow_offset_y = 0;
-    float shadow_radius = 0;
-    
     CursorType cursor = CursorType::Arrow;
+    
+    // Animation settings for transitions TO this style
+    AnimationConfig animation;
+};
+
+// Implicit Animation Target
+struct VisualState {
+    ResolvedStyle current; // Tweened value shown on screen
+    
+    // Target styles for states
+    // 0: Default, 1: Hover, 2: Active, 3: Disabled, 4: Focused
+    // Target styles for states
+    // 0: Default, 1: Hover, 2: Active, 3: Disabled, 4: Focused
+    std::map<int, ResolvedStyle> targets;
+    
+    int current_interaction_state = 0; // The state we are currently animating TOWARDS
+    
+    const ResolvedStyle& get_target(int state) const {
+        auto it = targets.find(state);
+        if (it != targets.end()) return it->second;
+        // Fallback to default (state 0), or create default from current if not found?
+        // It's expected that state 0 is always populated by the builder base
+        auto def = targets.find(0);
+        if (def != targets.end()) return def->second;
+        
+        static ResolvedStyle empty;
+        return empty;
+    }
+    
+    bool initialized = false;
 };
 
 // Input Handling
@@ -94,6 +160,11 @@ struct RenderData {
     bool is_image = false;
     void* texture = nullptr;
     float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+    
+    // Icon
+    bool is_icon = false;
+    IconType icon = IconType::Check;
+    uint32_t icon_color = 0xFFFFFFFF;
 };
 
 // ============================================================================
@@ -104,14 +175,15 @@ class NodeStore {
 public:
     std::vector<NodeID> nodes;  // Creation order
     
-    std::unordered_map<NodeID, NodeTree> tree;
-    std::unordered_map<NodeID, LayoutConstraints> constraints;
-    std::unordered_map<NodeID, LayoutData> layout;
-    std::unordered_map<NodeID, ResolvedStyle> style;
-    std::unordered_map<NodeID, InputState> input;
-    std::unordered_map<NodeID, ScrollState> scroll;
-    std::unordered_map<NodeID, RenderData> render;
-    std::unordered_map<NodeID, Transform> transform;
+    std::map<NodeID, NodeTree> tree;
+    std::map<NodeID, LayoutConstraints> constraints;
+    std::map<NodeID, LayoutData> layout;
+    std::map<NodeID, ResolvedStyle> style;      // The "Target" style for the current frame/state
+    std::map<NodeID, VisualState> visual_state; // The "Tweened" style (implicit animation)
+    std::map<NodeID, InputState> input;
+    std::map<NodeID, ScrollState> scroll;
+    std::map<NodeID, RenderData> render;
+    std::map<NodeID, Transform> transform;
     
     void clear() {
         nodes.clear();
@@ -119,8 +191,9 @@ public:
         constraints.clear();
         layout.clear();
         style.clear();
+        // visual_state is persistent, do NOT clear it!
         input.clear();
-        scroll.clear();
+        // scroll is persistent
         render.clear();
         transform.clear();
     }
@@ -132,6 +205,7 @@ public:
             constraints[id] = {};
             layout[id] = {};
             style[id] = {};
+            // visual_state[id] = {}; // Created on demand or preserved
             input[id] = {};
             scroll[id] = {};
             render[id] = {};

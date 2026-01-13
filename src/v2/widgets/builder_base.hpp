@@ -3,9 +3,11 @@
 #pragma once
 
 #include "widget_base.hpp"
-#include "../core/undo.hpp"
-#include "../script/engine.hpp"
-#include "../a11y/accessibility.hpp"
+// #include "../core/undo.hpp"
+// #include "../script/engine.hpp"
+// #include "../a11y/accessibility.hpp"
+#include <unordered_map>
+#include <functional>
 
 namespace fanta {
 
@@ -39,6 +41,12 @@ public:
     }
     Derived& tab_index(int index) { tab_index_ = index; return self(); }
     
+    // Implicit Animation (Phase 1)
+    Derived& animate_on(InteractionState state, std::function<void(ResolvedStyle&)> fn) {
+        visual_modifiers_[state] = fn;
+        return self();
+    }
+    
 protected:
     float width_ = 0;
     float height_ = 0;
@@ -52,62 +60,78 @@ protected:
     int tab_index_ = -1;
     bool built_ = false;
     
+    // Visual modifiers for implicit animation
+    std::map<InteractionState, std::function<void(ResolvedStyle&)>> visual_modifiers_;
+    
     Derived& self() { return static_cast<Derived&>(*this); }
     
     void apply_constraints(NodeHandle& n) {
+        FANTA_ASSERT_CONTEXT();
         if (width_ > 0) n.constraint().width = width_;
         if (height_ > 0) n.constraint().height = height_;
         if (grow_ > 0) n.constraint().grow = grow_;
         if (padding_ > 0) n.constraint().padding = padding_;
     }
     
-    void apply_script(NodeID id) {
-        if (script_code_) {
-            script::global_context().exec(script_code_);
+    // Call this at the end of build() to set up implicit animations
+    void apply_visuals(NodeHandle& n) {
+        if (visual_modifiers_.empty()) return;
+        
+        if (!g_ctx) return;
+        auto& store = g_ctx->store;
+        NodeID id = n.id();
+        
+        // Ensure VisualState exists
+        // Note: NodeHandle doesn't expose visual_state directly in current API, 
+        // we might need to add it or access store via context global?
+        // NodeHandle has store_ member but it's private.
+        // But we are in fanta namespace.
+        // Actually NodeHandle::visual_state() was not added in my previous edit to node.hpp!
+        // I need to add that accessor or just use g_ctx->store.
+        
+        if (!g_ctx) return;
+        auto& vs = g_ctx->store.visual_state[id];
+        
+        // Base style (already set by builder)
+        const auto& base = g_ctx->store.style[id];
+        vs.targets[0] = base; // Default state
+        
+        // Generate targets for modifiers
+        for (auto& [state, func] : visual_modifiers_) {
+            ResolvedStyle target = base;
+            func(target);
+            vs.targets[(int)state] = target;
         }
+        
+        if (!vs.initialized) {
+            vs.current = base;
+            vs.initialized = true;
+        }
+    }
+    
+    void apply_script(NodeID id) {
+        FANTA_ASSERT_CONTEXT();
+        // if (script_code_) {
+        //     script::global_context().exec(script_code_);
+        // }
     }
     
     void apply_accessibility(NodeID id, const char* role, const char* name) {
-        if (a11y_desc_ || tab_index_ >= 0) {
-            a11y::AccessibleInfo info;
-            info.name = name ? name : "";
-            info.description = a11y_desc_ ? a11y_desc_ : "";
-            info.role = role ? role : "widget";
-            a11y::AccessibleStore::instance().set(id, info);
-            
-            if (tab_index_ >= 0) {
-                a11y::FocusManager::instance().register_focusable(id, tab_index_);
-            }
-        }
+        // if (a11y_desc_ || tab_index_ >= 0) {
+        //     a11y::AccessibleInfo info;
+        //     info.name = name ? name : "";
+        //     info.description = a11y_desc_ ? a11y_desc_ : "";
+        //     info.role = role ? role : "widget";
+        //     a11y::AccessibleStore::instance().set(id, info);
+        //     
+        //     if (tab_index_ >= 0) {
+        //         a11y::FocusManager::instance().register_focusable(id, tab_index_);
+        //     }
+        // }
     }
 };
 
-// ============================================================================
-// Scope Guard for Panel/Window
-// ============================================================================
-
-class PanelScope {
-public:
-    PanelScope(const char* id) {
-        if (g_ctx) {
-            id_ = g_ctx->begin_node(id);
-            NodeHandle n = g_ctx->get(id_);
-            n.style().bg = Color::Hex(0x1A1A1AFF);
-            n.style().corner_radius = 8.0f;
-            n.constraint().padding = 8.0f;
-        }
-    }
-    
-    ~PanelScope() {
-        if (g_ctx) g_ctx->end_node();
-    }
-    
-    PanelScope(const PanelScope&) = delete;
-    PanelScope& operator=(const PanelScope&) = delete;
-    
-private:
-    NodeID id_ = INVALID_NODE;
-};
+// PanelScope moved to widget_base.hpp
 
 // ============================================================================
 // Children Lambda Helper

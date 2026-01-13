@@ -1,83 +1,95 @@
-# Fantasmagorie v2
+# Fantasmagorie
 
 Next-generation immediate-mode UI framework for C++, designed for modularity, extensibility, and modern application development.
 
-## 🚀 Overview
+---
 
-Fantasmagorie v2 is a complete rewrite of the original framework, adopting a strictly modular architecture while retaining the **Structure of Arrays (SoA)** data model for performance. It introduces a fluent **Builder Pattern API**, integrated scripting, accessibility support, and a plugin system.
+## 🆕 Fantasmagorie v3 (Latest)
 
-## ✨ Key Features
+**v3** is the production-ready rendering backend with strict header separation and commercial-grade architecture.
 
-### Core & Architecture
-- **SoA Data Model**: High-performance component-based storage (No fat `Widget` objects).
-- **Flexbox Layout**: Native support for Row/Column, Grow/Shrink, and alignment.
-- **Builder Pattern API**: Fluent, declarative syntax for UI construction.
-- **Modular Design**: Zero coupling between core, renderer, and platform layers.
+### Key Features
+- **Pimpl Pattern**: Zero OpenGL/platform headers leak into public API
+- **GLAD Loader**: Modern OpenGL function loading
+- **SDF Rendering**: Signed Distance Field shaders for resolution-independent shapes and text
+- **FreeType Typography**: Full Unicode support including Japanese, Chinese, emoji
+- **Triple VBO Buffering**: GPU-safe text rendering with buffer orphaning
 
-### Advanced Capabilities (Killer Features)
-- **📜 Scripting**: Built-in lightweight Lua-like script engine for logic embedding.
-- **♿ Accessibility**: First-class support for Screen Readers, Keyboard Nav, and High Contrast.
-- **🔌 Plugins**: Dynamic loading of Widgets and Themes via DLL/dylib/.so.
-- **📊 Profiler**: Integrated frame timing and performance bottleneck detection.
-- **📱 Mobile Ready**: Touch gesture recognition (Tap, Swipe, Pinch) and DPI-aware scaling.
+### Quick Start
+```bash
+cmake -S . -B build
+cmake --build build
+./build/bin/Debug/fanta_v3_demo.exe
+```
 
-## 📦 Modules (`src/v2/`)
+### Demo Output
+- 10,000 small rectangles (stress test grid)
+- Rounded rectangle with elevation shadow
+- Multi-language text (English + 日本語)
+- Real-time glyph atlas statistics
 
-| Module | Description |
+### v3 File Structure
+```
+src/v3/
+├── core/          # Types, fonts, shaders, text
+├── platform/      # OpenGL implementation (Pimpl)
+│   └── glad/      # GLAD loader
+├── shaders/       # GLSL SDF shaders
+└── demo.cpp       # Demonstration app
+```
+
+### Iron Rules (Header Safety)
+1. **No `windows.h`/`glad.h`/`glfw3.h` in `.hpp` files**
+2. Use `#define NOMINMAX` at top of `.cpp` files
+3. Use `#undef` guards for common Windows macros
+4. Forward declarations + Pimpl for platform types
+
+---
+
+## Fantasmagorie v2
+
+The immediate-mode UI layer with Builder Pattern API.
+
+### Features
+- **SoA Data Model**: High-performance component storage
+- **Flexbox Layout**: Row/Column, Grow/Shrink, alignment
+- **Builder Pattern API**: Fluent, declarative syntax
+- **Scripting**: Embedded Lua-like engine
+- **Accessibility**: Screen reader, keyboard nav support
+
+### Facade Headers
+| Header | Description |
 |--------|-------------|
-| `core` | Types, NodeStore, Layout Engine, UIContext, Undo/Redo |
-| `widgets` | Button, Label, Slider, Window, Table, Tree, Markdown |
-| `render` | Abstract Backend, DrawList (Layers/Clipping), OpenGL ES 3.0 |
-| `style` | Theme System (Minimal, Material, Glass), System Sync |
-| `platform` | Native Integration (Dialogs, Clipboard) & Mobile Utils |
-| `script` | Embedded Script Engine |
-| `a11y` | Accessibility & Focus Management |
-| `plugin` | Dynamic Library Loader |
-| `input` | Gesture Recognition |
+| `fanta_core.hpp` | Types, NodeStore, Layout, UIContext |
+| `fanta_widgets.hpp` | Button, Label, Slider, Window, etc. |
+| `fanta_render.hpp` | DrawList, OpenGL backend |
+| `fantasmagorie.hpp` | All-in-one include |
 
-## 💻 Usage Example
-
+### Usage
 ```cpp
 #include "fantasmagorie.hpp"
 
-// Fluent Builder API
 fanta::Window("Settings")
     .size(400, 300)
-    .draggable()
     .children([]{
-        
-        fanta::Row().children([]{
-            fanta::Label("Volume").bold().build();
-            fanta::Slider("vol", &volume, 0, 100)
-                .accessible("Master Volume Control")
-                .undoable()
-                .build();
-        });
-
-        fanta::Button("Save Configuration")
-            .primary()
-            .script("print('Config saved')")
-            .on_click([]{ save_config(); })
-            .build();
-            
-        // Embed Markdown Content
-        fanta::Markdown(
-            "# Release Notes\n"
-            "- Added **bold** text support\n"
-            "- Fixed layout bugs"
-        ).build();
+        fanta::Label("Volume").bold().build();
+        fanta::Slider("vol", &volume, 0, 100).build();
     });
 ```
 
+---
+
 ## 🛠️ Build
 
-v2 is header-heavy but requires C++17.
+Requires **C++17** and **CMake 3.16+**.
 ```bash
 mkdir build && cd build
 cmake ..
 cmake --build .
 ```
 
-## ⚠️ Legacy Code
+## ⚠️ Legacy
 
-The original v1 codebase has been archived to `src/v1_archive/` for reference. All active development happens in `src/v2/`.
+- v1 archived in `src/v1_archive/`
+- v2 active in `src/v2/`
+- **v3 is the recommended backend** (`src/v3/`)

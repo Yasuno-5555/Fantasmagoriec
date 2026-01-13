@@ -39,11 +39,41 @@ struct Color {
     constexpr uint32_t u32() const {
         return (uint32_t(r) << 24) | (uint32_t(g) << 16) | (uint32_t(b) << 8) | a;
     }
+
+    // Swizzle helpers for different Graphics APIs
+    // u32() returns 0xRRGGBBAA
+    
+    // For OpenGL with GL_RGBA8 (little endian platform)
+    // byte ordering in memory: [R, G, B, A]
+    constexpr uint32_t to_rgba8() const { return u32(); }
+    
+    // For systems expecting BGRA (e.g. some Windows APIs or Vulkan/D3D swapchains)
+    // byte ordering in memory: [B, G, R, A] -> 0xAARRGGBB in u32
+    constexpr uint32_t to_bgra8() const {
+        return (uint32_t(b) << 24) | (uint32_t(g) << 16) | (uint32_t(r) << 8) | a;
+    }
+
+    // For systems expecting ABGR (Common in some OpenGL extensions)
+    // byte ordering in memory: [A, B, G, R]
+    constexpr uint32_t to_abgr8() const {
+        return (uint32_t(a) << 24) | (uint32_t(b) << 16) | (uint32_t(g) << 8) | r;
+    }
     
     // Common colors
     static constexpr Color White() { return Color(255, 255, 255); }
     static constexpr Color Black() { return Color(0, 0, 0); }
     static constexpr Color Transparent() { return Color(0, 0, 0, 0); }
+    
+    static Color lerp(const Color& a, const Color& b, float t) {
+        if (t <= 0) return a;
+        if (t >= 1) return b;
+        return Color(
+            (uint8_t)(a.r + (b.r - a.r) * t),
+            (uint8_t)(a.g + (b.g - a.g) * t),
+            (uint8_t)(a.b + (b.b - a.b) * t),
+            (uint8_t)(a.a + (b.a - a.a) * t)
+        );
+    }
 };
 
 // ============================================================================
@@ -139,5 +169,20 @@ struct Transform {
 enum class LayoutDir { Row, Column };
 enum class Align { Start, Center, End, Stretch };
 enum class CursorType { Arrow, Hand, Text, Resize };
+
+
+
+enum class IconType : uint32_t {
+    Check,
+    Close,
+    Menu,
+    ChevronRight,
+    ChevronDown,
+    Settings,
+    Search,
+    User,
+    Info,
+    Warning
+};
 
 } // namespace fanta

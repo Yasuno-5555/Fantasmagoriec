@@ -5,6 +5,7 @@ cmake_minimum_required(VERSION 3.16)
 add_library(fanta_core STATIC
     context.cpp
     layout.cpp
+    debug.cpp
 )
 
 target_include_directories(fanta_core PUBLIC

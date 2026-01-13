@@ -10,9 +10,10 @@ void LabelBuilder::build() {
     NodeID id = g_ctx->begin_node(text_);
     NodeHandle n = g_ctx->get(id);
     
-    // Auto-size (will be calculated by layout)
-    n.constraint().width = -1;  // Auto
-    n.constraint().height = 20; // Line height
+    // Apply common properties
+    if (common.width <= 0) common.width = -1; // Auto
+    if (common.height <= 0) common.height = 20; // Default line height
+    common.apply(n);
     
     n.style().text = Color::Hex(color_);
     n.render().is_text = true;

@@ -134,37 +134,38 @@ set(SOURCES
 
 
 # Executable
-add_executable(Fantasmagorie ${SOURCES})
+# add_executable(Fantasmagorie ${SOURCES})
+
+# V2 Build
+add_subdirectory(src/v2)
+
+# V3 Build (SDF Rewrite)
+add_subdirectory(src/v3)
 
 # Test STB
-add_executable(TestSTB test_stb.cpp)
-target_include_directories(TestSTB PRIVATE ${stb_SOURCE_DIR})
+# add_executable(TestSTB test_stb.cpp)
+# target_include_directories(TestSTB PRIVATE ${stb_SOURCE_DIR})
 
-
-target_link_libraries(Fantasmagorie PRIVATE glfw)
-if(WIN32)
-    target_link_libraries(Fantasmagorie PRIVATE imm32 user32 gdi32 shell32 opengl32 freetype)
-endif()
 
 # Test Compile
-add_executable(TestCompile src/test_compile.cpp)
-target_include_directories(TestCompile PRIVATE 
-    ${glfw_SOURCE_DIR}/include
-    ${stb_SOURCE_DIR}
-    ${freetype_SOURCE_DIR}/include
-    src
-)
+# add_executable(TestCompile src/test_compile.cpp)
+# target_include_directories(TestCompile PRIVATE 
+#     ${glfw_SOURCE_DIR}/include
+#     ${stb_SOURCE_DIR}
+#     ${freetype_SOURCE_DIR}/include
+#     src
+# )
 
 
 
 
 
 
-target_include_directories(Fantasmagorie PRIVATE 
-    ${glfw_SOURCE_DIR}/include
-    ${stb_SOURCE_DIR}
-    ${freetype_SOURCE_DIR}/include
-    src
-)
+# target_include_directories(Fantasmagorie PRIVATE 
+#     ${glfw_SOURCE_DIR}/include
+#     ${stb_SOURCE_DIR}
+#     ${freetype_SOURCE_DIR}/include
+#     src
+# )
 
 

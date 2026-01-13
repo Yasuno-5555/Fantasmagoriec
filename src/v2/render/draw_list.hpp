@@ -12,10 +12,13 @@ namespace fanta {
 // Draw Types
 // ============================================================================
 
+
 enum class DrawType : uint32_t {
     Rect = 0,
     Text = 1,
     Image = 2,
+    Border = 3,
+    Icon = 4,    // New!
     Line = 10,
     Bezier = 11,
     Arc = 12,
@@ -75,6 +78,11 @@ public:
         float ny = std::max(y, current_clip.y);
         float nx2 = std::min(x + w, current_clip.x + current_clip.w);
         float ny2 = std::min(y + h, current_clip.y + current_clip.h);
+        
+        // Ensure strictly positive size
+        if (nx2 < nx) nx2 = nx;
+        if (ny2 < ny) ny2 = ny;
+        
         current_clip = {nx, ny, nx2 - nx, ny2 - ny};
     }
     
@@ -107,6 +115,18 @@ public:
         cmd.color = color;
         cmd.text = text;
         cmd.texture = font;
+        cmd.cx = current_clip.x; cmd.cy = current_clip.y;
+        cmd.cw = current_clip.w; cmd.ch = current_clip.h;
+        cmds[(int)current_layer].push_back(cmd);
+    }
+
+    void add_border(float x, float y, float w, float h, uint32_t color, float thickness, float radius = 0) {
+        DrawCmd cmd;
+        cmd.type = DrawType::Border;
+        cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
+        cmd.color = color;
+        cmd.p1 = radius;
+        cmd.p2 = thickness;
         cmd.cx = current_clip.x; cmd.cy = current_clip.y;
         cmd.cw = current_clip.w; cmd.ch = current_clip.h;
         cmds[(int)current_layer].push_back(cmd);
@@ -170,6 +190,8 @@ public:
         cmd.color = color;
         cmds[(int)current_layer].push_back(cmd);
     }
+    
+    void add_icon(float x, float y, float size, IconType icon, uint32_t color);
 };
 
 } // namespace fanta
