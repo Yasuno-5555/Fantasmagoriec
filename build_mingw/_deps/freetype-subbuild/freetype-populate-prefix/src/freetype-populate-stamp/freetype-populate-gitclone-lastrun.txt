@@ -1,3 +1,0 @@
-repository='https://github.com/freetype/freetype.git'
-module=''
-tag='origin'
