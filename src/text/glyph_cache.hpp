@@ -1,9 +1,8 @@
-#pragma once
-#include "core/font_types.hpp"
-#include <vector>
-#include <map>
+#include "backend/gpu_resources.hpp"
 
 namespace fanta {
+    class Backend; // Forward decl
+
 namespace internal {
 
     // Manages the SDF Texture Atlas
@@ -12,17 +11,17 @@ namespace internal {
         static GlyphCache& Get();
         
         // Initialize Atlas texture (empty)
-        void init();
+        void init(Backend* backend);
         
         // Retrieve UVs for a glyph. Generates/Updates atlas if missing.
         // Returns true if found/generated.
         // out_uvs: u0, v0, u1, v1
-        bool get_glyph_uv(FontID font, uint32_t codepoint, 
+        bool get_glyph_uv(FontID font, uint32_t glyph_index, 
                           float& u0, float& v0, float& u1, float& v1,
-                          float& atlas_w, float& atlas_h);
-                          
-        // OpenGL Object ID
-        uint32_t get_texture_id() const { return texture_id; }
+                          float& glyph_w, float& glyph_h, float& glyph_advance);
+                           
+        // API-agnostic texture handle
+        GpuTexturePtr get_atlas_texture() const { return texture; }
         
         // Upload dirty regions to GPU
         void update_texture();
@@ -35,7 +34,7 @@ namespace internal {
         static const int SDF_SIZE = 32; // Base size for SDF generation
         static const int PADDING = 2;   // Padding between glyphs
         
-        uint32_t texture_id = 0;
+        GpuTexturePtr texture;
         std::vector<uint8_t> pixels; // 1 byte per pixel (Alpha)
         bool is_dirty = false;
         
@@ -55,7 +54,7 @@ namespace internal {
         
         struct CachedGlyph {
             float u0, v0, u1, v1;
-            float px_w, px_h;
+            float px_w, px_h, px_adv;
         };
         
         std::map<CacheKey, CachedGlyph> cache;

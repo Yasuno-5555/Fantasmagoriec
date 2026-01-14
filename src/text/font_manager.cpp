@@ -46,7 +46,7 @@ namespace internal {
         return faces[font];
     }
 
-    const GlyphMetrics& FontManager::get_metrics(FontID font, uint32_t codepoint) {
+    const GlyphMetrics& FontManager::get_metrics(FontID font, uint32_t glyph_index) {
         static GlyphMetrics empty_metrics;
         
         // Ensure cache size
@@ -54,12 +54,8 @@ namespace internal {
             metrics_cache.resize(font + 1);
         }
         
-        // Check cache (using simple direct mapping for ASCII/BMP, sparse map otherwise)
-        // For Phase 4 (ASCII), vector is fine if we assume small codepoints.
-        // But codepoint can be large. Use map for safety?
-        // Let's assume codepoint < 256 for Phase 4 or just use a helper method.
-        // Actually, let's keep it simple: always load for now.
-        // Optimization: Add proper caching later. 
+        // For now we don't actually cache in metrics_cache vector to keep it simple,
+        // but the signature must be correct.
         
         FT_Face face = get_face(font);
         if (!face) return empty_metrics;
@@ -67,7 +63,7 @@ namespace internal {
         // Set size to Base SDF Size for consistent scaling
         FT_Set_Pixel_Sizes(face, 0, BASE_SDF_SIZE);
 
-        if (FT_Load_Glyph(face, FT_Get_Char_Index(face, codepoint), FT_LOAD_DEFAULT)) {
+        if (FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT)) {
             return empty_metrics;
         }
 
@@ -83,7 +79,7 @@ namespace internal {
         return temp;
     }
 
-    bool FontManager::generate_sdf(FontID font, uint32_t codepoint, int sdf_size, 
+    bool FontManager::generate_sdf(FontID font, uint32_t glyph_index, int sdf_size, 
                                    std::vector<uint8_t>& out_buffer, int& out_w, int& out_h) {
         FT_Face face = get_face(font);
         if (!face) return false;
@@ -93,7 +89,6 @@ namespace internal {
         FT_Set_Pixel_Sizes(face, 0, sdf_size);
 
         // Load Glyph
-        uint32_t glyph_index = FT_Get_Char_Index(face, codepoint);
         if (FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT)) { // FT_LOAD_NO_BITMAP?
             return false;
         }
@@ -123,6 +118,19 @@ namespace internal {
         }
 
         return true;
+    }
+
+    FontID FontManager::find_font_for_char(uint32_t codepoint) {
+        // 1. Check fallback stack first if populated
+        for (FontID id : font_fallback_stack) {
+            FT_Face face = get_face(id);
+            if (face && FT_Get_Char_Index(face, codepoint) != 0) return id;
+        }
+        // 2. Check all loaded fonts as a final safety
+        for (size_t i = 0; i < faces.size(); ++i) {
+            if (FT_Get_Char_Index(faces[i], codepoint) != 0) return static_cast<FontID>(i);
+        }
+        return 0; // Default font
     }
 
 } // namespace internal

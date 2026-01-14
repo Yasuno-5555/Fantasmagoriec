@@ -8,19 +8,249 @@
 #include <vector>
 #include <cmath>
 
-#include "backend/opengl_backend.hpp"
+#include "backend_factory.hpp"
 #include "core/types_internal.hpp"
 #include "backend/drawlist.hpp"
 #include "text/glyph_cache.hpp" // Phase 4
+#include <glad/gl.h>
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
 
 // Phase 5.2: Screenshot support
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
 namespace fanta {
 
+// OpenGL Implementation of GpuTexture
+class OpenGLTexture : public internal::GpuTexture {
+public:
+    OpenGLTexture(int w, int h, internal::TextureFormat fmt) : w_(w), h_(h), format_(fmt) {
+        glGenTextures(1, &id_);
+        glBindTexture(GL_TEXTURE_2D, id_);
+        
+        GLint internal_fmt = GL_RGBA8;
+        GLenum external_fmt = GL_RGBA;
+        GLenum type = GL_UNSIGNED_BYTE;
+        
+        if (fmt == internal::TextureFormat::R8) {
+            internal_fmt = GL_R8;
+            external_fmt = GL_RED;
+        } else if (fmt == internal::TextureFormat::RGBA16F) {
+            internal_fmt = GL_RGBA16F;
+            type = GL_HALF_FLOAT;
+        }
+        
+        glTexImage2D(GL_TEXTURE_2D, 0, internal_fmt, w_, h_, 0, external_fmt, type, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    
+    ~OpenGLTexture() {
+        if (id_) glDeleteTextures(1, &id_);
+    }
+    
+    void upload(const void* data, int w, int h) override {
+        glBindTexture(GL_TEXTURE_2D, id_);
+        GLenum external_fmt = (format_ == internal::TextureFormat::R8) ? GL_RED : GL_RGBA;
+        GLenum type = (format_ == internal::TextureFormat::RGBA16F) ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE;
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, external_fmt, type, data);
+    }
+    
+    uint64_t get_native_handle() const override { return id_; }
+    int width() const override { return w_; }
+    int height() const override { return h_; }
+
+private:
+    GLuint id_ = 0;
+    int w_, h_;
+    internal::TextureFormat format_;
+};
+
+// --- Class Definition (Moved from Header) ---
+class OpenGLBackend : public Backend {
+    GLFWwindow* window = nullptr;
+    
+    // DPI context
+    float device_pixel_ratio = 1.0f;
+    int logical_width = 0;
+    int logical_height = 0;
+    
+    // Render Resources
+    GLuint sdf_program, text_program;
+    GLuint compute_program, copy_program;
+    GLuint loc_pos, loc_size, loc_color, loc_radius, loc_shape, loc_is_squircle, loc_blur, loc_wobble;
+    GLuint loc_backdrop, loc_blur_sigma;
+    GLuint loc_c_offset;
+    GLuint vao, vbo;
+    
+    // Intermediate Textures for Blur/Glass
+    GLuint blur_tex[2] = {0, 0};
+    int blur_w = 0, blur_h = 0;
+    
+    bool compile_sdf_shader();
+    bool compile_text_shader(); 
+    void setup_quad();
+    void setup_text_renderer(); 
+    
+    float scroll_accum = 0; // Phase 8
+    
+public:
+    bool init(int w, int h, const char* title) override;
+    void shutdown() override;
+    bool is_running() override;
+    void begin_frame(int w, int h) override;
+    void end_frame() override;
+    void render(const fanta::internal::DrawList& draw_list) override;
+    void get_mouse_state(float& x, float& y, bool& down, float& wheel) override;
+    
+    internal::GpuTexturePtr create_texture(int w, int h, internal::TextureFormat format) override {
+        return std::make_shared<OpenGLTexture>(w, h, format);
+    }
+
+    Capabilities capabilities() const override { return { true }; }
+    
+    // Phase 5.2: Screenshot capture
+    bool capture_screenshot(const char* filename);
+};
+
+
+// --- Factory Implementation ---
+std::unique_ptr<Backend> CreateOpenGLBackend() {
+    return std::make_unique<OpenGLBackend>();
+}
+
+
+// --- Implementation ---
+
 // Phase 2: SDF Shader Source (embedded)
-// ... (sdf_vert_src, sdf_frag_src) ...
+static const char* sdf_vert_src = R"(
+#version 330 core
+layout(location = 0) in vec2 aPos;
+
+uniform vec2 uShapePos;
+uniform vec2 uShapeSize;
+uniform vec2 uViewportSize;
+uniform float uDevicePixelRatio;
+
+out vec2 vFragCoord;
+
+void main() {
+    // Fullscreen quad
+    vec2 ndc = aPos;
+    gl_Position = vec4(ndc, 0.0, 1.0);
+    // Convert to screen-space coords where Y=0 is at TOP (like layout coords)
+    vec2 raw_coords = (ndc * 0.5 + 0.5) * uViewportSize;
+    vFragCoord = vec2(raw_coords.x, uViewportSize.y - raw_coords.y);
+}
+)";
+
+
+
+static const char* sdf_frag_src = R"(
+#version 330 core
+in vec2 vFragCoord;
+
+uniform vec2 uShapePos;
+uniform vec2 uShapeSize;
+uniform vec4 uColor;
+uniform float uRadius;
+uniform int uShapeType;
+uniform bool uIsSquircle; 
+uniform vec2 uViewportSize;
+uniform float uDevicePixelRatio;
+uniform float uBlurSigma;
+uniform sampler2D uBackdrop;
+uniform vec2 uWobble; // Phase 40: Liquid Glass
+
+out vec4 FragColor;
+
+float sdf_rounded_rect(vec2 p, vec2 size, float radius) {
+    if (uIsSquircle) {
+        radius = min(radius, min(size.x, size.y) * 0.5);
+        vec2 d = abs(p) - (size - radius);
+        d = max(d, 0.0) / radius;
+        return (pow(d.x, 2.4) + pow(d.y, 2.4) - 1.0) * radius;
+    }
+    radius = min(radius, min(size.x, size.y) * 0.5);
+    vec2 d = abs(p) - size + radius;
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - radius;
+}
+
+float sdf_circle(vec2 p, float r) { return length(p) - r; }
+float sdf_rect(vec2 p, vec2 size) {
+    vec2 d = abs(p) - size;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+
+void main() {
+    float aa_width = 1.0 / uDevicePixelRatio;
+    vec2 center = uShapePos + uShapeSize * 0.5;
+    vec2 p = vFragCoord - center;
+    
+    float dist = 0.0;
+    if (uShapeType == 0) dist = sdf_rect(p, uShapeSize * 0.5);
+    else if (uShapeType == 1) dist = sdf_rounded_rect(p, uShapeSize * 0.5, uRadius);
+    else if (uShapeType == 2) dist = sdf_circle(p, uRadius);
+    
+    float alpha = 1.0 - smoothstep(-aa_width, aa_width, dist);
+    
+    // Liquid Glass: Wobble displacement
+    vec2 screenUV = gl_FragCoord.xy / vec2(textureSize(uBackdrop, 0));
+    vec2 displacedUV = screenUV + uWobble * 0.01; 
+    
+    vec4 finalColor = uColor;
+    if (uBlurSigma > 0.0) {
+        vec4 blurred = texture(uBackdrop, displacedUV);
+        // Vibrant Boost
+        blurred.rgb *= 1.1; 
+        finalColor = mix(blurred, uColor, uColor.a);
+    }
+    
+    // Neon Accent: Super thin line at the inner edge
+    float accent = 1.0 - smoothstep(0.0, 2.0 / uDevicePixelRatio, abs(dist + 0.5));
+    vec3 neonColor = vec3(0.0, 1.0, 1.0); // Cyan Neon
+    if (uColor.r > 0.5) neonColor = vec4(1.0, 0.2, 0.8, 1.0).rgb; // Pink Neon
+    
+    finalColor.rgb = mix(finalColor.rgb, neonColor, accent * 0.4);
+    finalColor.a = alpha;
+    
+    FragColor = finalColor;
+}
+)";
+
+static const char* blur_compute_src = R"(
+#version 430 core
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(rgba8, binding = 0) uniform readonly image2D uInput;
+layout(rgba8, binding = 1) uniform writeonly image2D uOutput;
+
+uniform int uHorizontal;
+uniform int uRadius;
+
+void main() {
+    ivec2 gPos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(uInput);
+    if (gPos.x >= size.x || gPos.y >= size.y) return;
+
+    vec4 result = vec4(0.0);
+    float totalWeight = 0.0;
+    for (int i = -uRadius; i <= uRadius; ++i) {
+        float weight = exp(-(i * i) / (2.0 * uRadius * uRadius));
+        ivec2 offset = uHorizontal == 1 ? ivec2(i, 0) : ivec2(0, i);
+        ivec2 pos = clamp(gPos + offset, ivec2(0), size - 1);
+        result += imageLoad(uInput, pos) * weight;
+        totalWeight += weight;
+    }
+    vec4 frag = result / totalWeight;
+    // Boost saturation slightly in the blur pass for vibrancy
+    float gray = dot(frag.rgb, vec3(0.299, 0.587, 0.114));
+    frag.rgb = mix(vec3(gray), frag.rgb, 1.2);
+    imageStore(uOutput, gPos, frag);
+}
+)";
 
 // Phase 4: Text Shader
 static const char* text_vert_src = R"(
@@ -35,6 +265,45 @@ void main() {
     float y = (1.0 - aData.y / uViewportSize.y) * 2.0 - 1.0; 
     gl_Position = vec4(x, y, 0.0, 1.0);
     vUV = aData.zw;
+}
+)";
+
+static const char* blur_compute_src = R"(#version 430 core
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(rgba8, binding = 0) uniform readonly image2D uInput;
+layout(rgba8, binding = 1) uniform writeonly image2D uOutput;
+uniform int uOffset;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(uInput);
+    if(pos.x >= size.x || pos.y >= size.y) return;
+
+    // Kawase Blur: 4 samples offset by (d+0.5)
+    float d = float(uOffset) + 0.5;
+    vec4 sum = imageLoad(uInput, pos + ivec2(int(d), int(d)));
+    sum += imageLoad(uInput, pos + ivec2(int(-d), int(d)));
+    sum += imageLoad(uInput, pos + ivec2(int(d), int(-d)));
+    sum += imageLoad(uInput, pos + ivec2(int(-d), int(-d)));
+    
+    imageStore(uOutput, pos, sum * 0.25);
+}
+)";
+
+const char* copy_frag_src = R"(#version 330 core
+out vec4 FragColor;
+in vec2 TexCoords;
+uniform sampler2D uScreen;
+uniform float uNoise;
+
+float rand(vec2 co) {
+    return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void main() {
+    vec4 color = texture(uScreen, TexCoords);
+    float n = (rand(TexCoords) - 0.5) * uNoise;
+    FragColor = vec4(color.rgb + n, color.a);
 }
 )";
 
@@ -61,110 +330,7 @@ void main() {
 }
 )";
 
-static const char* sdf_vert_src = R"(
-#version 330 core
-layout(location = 0) in vec2 aPos;
 
-uniform vec2 uShapePos;
-uniform vec2 uShapeSize;
-uniform vec2 uViewportSize;
-uniform float uDevicePixelRatio;
-
-out vec2 vFragCoord;
-
-void main() {
-    // Fullscreen quad
-    vec2 ndc = aPos;
-    gl_Position = vec4(ndc, 0.0, 1.0);
-    // Convert to screen-space coords where Y=0 is at TOP (like layout coords)
-    vec2 raw_coords = (ndc * 0.5 + 0.5) * uViewportSize;
-    vFragCoord = vec2(raw_coords.x, uViewportSize.y - raw_coords.y);
-}
-)";
-
-static const char* sdf_frag_src = R"(
-#version 330 core
-in vec2 vFragCoord;
-
-uniform vec2 uShapePos;
-uniform vec2 uShapeSize;
-uniform vec4 uColor;
-uniform float uRadius;
-uniform int uShapeType;
-uniform vec2 uViewportSize;
-uniform float uDevicePixelRatio;
-
-out vec4 FragColor;
-
-float sdf_rounded_rect(vec2 p, vec2 size, float radius) {
-    // Clamp radius to prevent corner inversion
-    radius = min(radius, min(size.x, size.y) * 0.5);
-    vec2 d = abs(p) - size + radius;
-    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - radius;
-}
-
-float sdf_circle(vec2 p, float r) {
-    return length(p) - r;
-}
-
-float sdf_rect(vec2 p, vec2 size) {
-    vec2 d = abs(p) - size;
-    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
-}
-
-float smooth_edge(float dist, float width) {
-    return 1.0 - smoothstep(-width, width, dist);
-}
-
-float sdf_segment(vec2 p, vec2 a, vec2 b) {
-    vec2 pa = p-a, ba = b-a;
-    float h = clamp( dot(pa,ba)/dot(ba,ba), 0.0, 1.0 );
-    return length( pa - ba*h );
-}
-
-void main() {
-    float dist = 0.0;
-    
-    // Edge AA: 1 logical pixel
-    float aa_width = 1.0 / uDevicePixelRatio;
-    
-    if (uShapeType == 3) {
-        // Line Segment
-        vec2 p = vFragCoord; 
-        vec2 p0 = uShapePos;
-        vec2 p1 = uShapeSize;
-        float half_width = uRadius;
-        
-        dist = sdf_segment(p, p0, p1) - half_width;
-        
-    } else {
-        vec2 shape_pos = uShapePos;
-        vec2 shape_size = uShapeSize;
-        float shape_radius = uRadius;
-        
-        vec2 center = shape_pos + shape_size * 0.5;
-        vec2 p = vFragCoord - center;
-        
-        if (uShapeType == 0) {
-            dist = sdf_rect(p, shape_size * 0.5);
-        } else if (uShapeType == 1) {
-            dist = sdf_rounded_rect(p, shape_size * 0.5, shape_radius);
-        } else if (uShapeType == 2) {
-            dist = sdf_circle(p, shape_radius);
-        } else {
-            dist = sdf_rect(p, shape_size * 0.5);
-        }
-    }
-    
-    float alpha = smooth_edge(dist, aa_width);
-    FragColor = vec4(uColor.rgb, uColor.a * alpha);
-
-    
-    // NOTE: This shader renders ONE shape.
-    // To do shadow, we need to render the shape TWICE: once for shadow, once for body.
-    // The backend Loop handles this.
-}
-)";
 
 static GLuint compile_shader(GLenum type, const char* src) {
     GLuint shader = glCreateShader(type);
@@ -229,6 +395,42 @@ bool OpenGLBackend::compile_text_shader() {
     glDeleteShader(vs);
     glDeleteShader(fs);
     return text_program != 0;
+}
+
+bool OpenGLBackend::compile_compute_program() {
+    GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+    glShaderSource(shader, 1, &blur_compute_src, NULL);
+    glCompileShader(shader);
+    
+    GLint success;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char info[512];
+        glGetShaderInfoLog(shader, 512, nullptr, info);
+        std::cerr << "Compute Shader compile error: " << info << std::endl;
+        glDeleteShader(shader);
+        return false;
+    }
+    
+    compute_program = glCreateProgram();
+    glAttachShader(compute_program, shader);
+    glLinkProgram(compute_program);
+    glDeleteShader(shader);
+    
+    loc_c_offset = glGetUniformLocation(compute_program, "uOffset");
+    return true;
+}
+
+bool OpenGLBackend::compile_copy_program() {
+    const char* vs_src = "#version 330 core\nlayout(location=0) in vec2 pos; out vec2 TexCoords; void main() { TexCoords = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0.0, 1.0); }";
+    GLuint vs = compile_shader(GL_VERTEX_SHADER, vs_src);
+    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, copy_frag_src);
+    if (!vs || !fs) return false;
+    
+    copy_program = link_program(vs, fs);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return copy_program != 0;
 }
 
 void OpenGLBackend::setup_text_renderer() {
@@ -307,12 +509,37 @@ bool OpenGLBackend::init(int w, int h, const char* title) {
         return false;
     }
     
+    // Phase 27: Compute & Copy Shaders
+    if (!compile_compute_program() || !compile_copy_program()) {
+        std::cerr << "Failed to compile Compute/Copy shaders" << std::endl;
+    }
+    
     setup_quad();
     setup_text_renderer();
     
     // Phase 4: Init Glyph Cache GPU resources
     internal::GlyphCache::Get().init();
     
+    // Initial render setup for compute
+    blur_w = w; blur_h = h;
+    
+    // Phase 35: Accessibility Subclassing
+    HWND hwnd = glfwGetWin32Window(window);
+    if (hwnd) {
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)this);
+        auto original_proc = (WNDPROC)SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)[](HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) -> LRESULT {
+            if (msg == WM_GETOBJECT) {
+                extern LRESULT FantaHandleUiaRequest(HWND, WPARAM, LPARAM);
+                LRESULT res = FantaHandleUiaRequest(hWnd, wParam, lParam);
+                if (res != 0) return res;
+            }
+            // Fallback to original proc (complexity: need to store it somewhere)
+            // For now, assume we can fetch it or just use DefWindowProc if we don't care about GLFW for this msg
+            return CallWindowProc((WNDPROC)GetProp(hWnd, L"FantaOrigProc"), hWnd, msg, wParam, lParam);
+        });
+        SetProp(hwnd, L"FantaOrigProc", (HANDLE)original_proc);
+    }
+
     logical_width = w;
     logical_height = h;
     
@@ -369,6 +596,9 @@ void OpenGLBackend::render(const internal::DrawList& draw_list) {
     GLint loc_color = glGetUniformLocation(sdf_program, "uColor");
     GLint loc_radius = glGetUniformLocation(sdf_program, "uRadius");
     GLint loc_shape = glGetUniformLocation(sdf_program, "uShapeType");
+    GLint loc_is_squircle = glGetUniformLocation(sdf_program, "uIsSquircle"); // Phase 21
+    loc_backdrop = glGetUniformLocation(sdf_program, "uBackdrop");
+    loc_blur_sigma = glGetUniformLocation(sdf_program, "uBlurSigma");
     GLint loc_vp = glGetUniformLocation(sdf_program, "uViewportSize");
     GLint loc_dpr = glGetUniformLocation(sdf_program, "uDevicePixelRatio");
 
@@ -406,6 +636,53 @@ void OpenGLBackend::render(const internal::DrawList& draw_list) {
     auto apply_p = [&](float& x, float& y) {
         float cx = tx_s.back(), cy = ty_s.back(), cs = sc_s.back();
         x = x * cs + cx; y = y * cs + cy;
+    };
+
+    auto apply_blend_mode = [&](internal::BlendMode mode) {
+        glEnable(GL_BLEND);
+        glBlendEquation(GL_FUNC_ADD);
+        
+        switch (mode) {
+            case internal::BlendMode::SourceOver:
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                break;
+            case internal::BlendMode::SourceIn:
+                glBlendFunc(GL_DST_ALPHA, GL_ZERO);
+                break;
+            case internal::BlendMode::SourceOut:
+                glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_ZERO);
+                break;
+            case internal::BlendMode::SourceAtop:
+                glBlendFunc(GL_DST_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                break;
+            case internal::BlendMode::DestOver:
+                glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_ONE);
+                break;
+            case internal::BlendMode::DestIn:
+                glBlendFunc(GL_ZERO, GL_SRC_ALPHA);
+                break;
+            case internal::BlendMode::DestOut:
+                glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+                break;
+            case internal::BlendMode::DestAtop:
+                glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_SRC_ALPHA);
+                break;
+            case internal::BlendMode::Xor:
+                glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                break;
+            case internal::BlendMode::Plus:
+                glBlendFunc(GL_ONE, GL_ONE);
+                break;
+            case internal::BlendMode::Multiply:
+                glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
+                break;
+            case internal::BlendMode::Screen:
+                glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR);
+                break;
+            default:
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                break;
+        }
     };
 
     // Phase 8: Scissor Stack
@@ -596,7 +873,11 @@ void OpenGLBackend::render(const internal::DrawList& draw_list) {
         } else if (cmd.type == internal::DrawCmdType::PopClip) {
             pop_clip();
             continue;
-        } else if (cmd.type == internal::DrawCmdType::Bezier) {
+        }
+
+        apply_blend_mode(cmd.blend);
+
+        if (cmd.type == internal::DrawCmdType::Bezier) {
              float bx0 = cmd.bezier.p0_x, by0 = cmd.bezier.p0_y;
              float bx1 = cmd.bezier.p1_x, by1 = cmd.bezier.p1_y;
              float bx2 = cmd.bezier.p2_x, by2 = cmd.bezier.p2_y;
@@ -634,6 +915,7 @@ void OpenGLBackend::render(const internal::DrawList& draw_list) {
              if (loc_size >= 0) glUniform2f(loc_size, size_x, size_y);
              if (loc_color >= 0) glUniform4f(loc_color, cmd.rectangle.color_r, cmd.rectangle.color_g, cmd.rectangle.color_b, cmd.rectangle.color_a);
              if (loc_radius >= 0) glUniform1f(loc_radius, 0.0f);
+             if (loc_blur_sigma >= 0) glUniform1f(loc_blur_sigma, 0.0f); // Rects usually no blur unless specified
              if (loc_shape >= 0) glUniform1i(loc_shape, 0); 
         } else if (cmd.type == internal::DrawCmdType::RoundedRect) {
              float pos_x = cmd.rounded_rect.pos_x, pos_y = cmd.rounded_rect.pos_y;
@@ -645,7 +927,15 @@ void OpenGLBackend::render(const internal::DrawList& draw_list) {
              if (loc_size >= 0) glUniform2f(loc_size, size_x, size_y);
              if (loc_color >= 0) glUniform4f(loc_color, cmd.rounded_rect.color_r, cmd.rounded_rect.color_g, cmd.rounded_rect.color_b, cmd.rounded_rect.color_a);
              if (loc_radius >= 0) glUniform1f(loc_radius, radius);
+             if (loc_is_squircle >= 0) glUniform1i(loc_is_squircle, cmd.rounded_rect.is_squircle ? 1 : 0); 
+             if (loc_blur_sigma >= 0) glUniform1f(loc_blur_sigma, cmd.rounded_rect.backdrop_blur);
              if (loc_shape >= 0) glUniform1i(loc_shape, 1); 
+             
+             if (cmd.rounded_rect.backdrop_blur > 0.0f) {
+                 glActiveTexture(GL_TEXTURE1);
+                 glBindTexture(GL_TEXTURE_2D, final_blur_tex);
+                 glUniform1i(loc_backdrop, 1);
+             }
         } else if (cmd.type == internal::DrawCmdType::Circle) {
              float left = cmd.circle.center_x - cmd.circle.r;
              float top = cmd.circle.center_y - cmd.circle.r;
@@ -656,6 +946,7 @@ void OpenGLBackend::render(const internal::DrawList& draw_list) {
              if (loc_size >= 0) glUniform2f(loc_size, size, size);
              if (loc_color >= 0) glUniform4f(loc_color, cmd.circle.color_r, cmd.circle.color_g, cmd.circle.color_b, cmd.circle.color_a);
              if (loc_radius >= 0) glUniform1f(loc_radius, radius);
+             if (loc_blur_sigma >= 0) glUniform1f(loc_blur_sigma, 0.0f);
              if (loc_shape >= 0) glUniform1i(loc_shape, 2); 
         } else if (cmd.type == internal::DrawCmdType::Line) {
              float p0x = cmd.line.p0_x, p0y = cmd.line.p0_y;
@@ -674,6 +965,7 @@ void OpenGLBackend::render(const internal::DrawList& draw_list) {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
     
+    
 
     
     glBindVertexArray(0);
@@ -685,8 +977,11 @@ void OpenGLBackend::render(const internal::DrawList& draw_list) {
         
         // Bind Atlas
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, internal::GlyphCache::Get().get_texture_id());
-        internal::GlyphCache::Get().update_texture();
+        auto atlas = internal::GlyphCache::Get().get_atlas_texture();
+        if (atlas) {
+            glBindTexture(GL_TEXTURE_2D, (GLuint)atlas->get_native_handle());
+            internal::GlyphCache::Get().update_texture();
+        }
         
         GLint loc_atlas = glGetUniformLocation(text_program, "uAtlas");
         if (loc_atlas >= 0) glUniform1i(loc_atlas, 0);
@@ -729,9 +1024,13 @@ void OpenGLBackend::render(const internal::DrawList& draw_list) {
                 batch.reserve(run.quads.size() * 6 * 4);
                 
                 for (const auto& q : run.quads) {
-                    float x0 = q.x0, y0 = q.y0, x1 = q.x1, y1 = q.y1;
+                    float x0 = q.x0 + run.offset_x;
+                    float y0 = q.y0 + run.offset_y;
+                    float x1 = q.x1 + run.offset_x;
+                    float y1 = q.y1 + run.offset_y;
+                    
                     float tx0 = x0, ty0 = y0, tx1 = x1, ty1 = y1;
-                    // Apply Transform to text quads
+                    // Apply Transform (Pan/Zoom/Stack)
                     apply_p(tx0, ty0);
                     apply_p(tx1, ty1);
                     // Note: This applies uniform scale and translation to quads.

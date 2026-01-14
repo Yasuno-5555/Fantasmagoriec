@@ -37,8 +37,8 @@ namespace internal {
 
         // Heading check
         int h_level = 0;
-        if (input.starts_with("## ")) { h_level = 2; i = 3; }
-        else if (input.starts_with("# ")) { h_level = 1; i = 2; }
+        if (input.rfind("## ", 0) == 0) { h_level = 2; i = 3; }
+        else if (input.rfind("# ", 0) == 0) { h_level = 1; i = 2; }
 
         while (i < n) {
             // Unescape

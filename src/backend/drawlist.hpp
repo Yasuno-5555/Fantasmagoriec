@@ -7,6 +7,8 @@
 namespace fanta {
 namespace internal {
 
+enum class PathOp { MoveTo, LineTo, QuadTo, CubicTo, Close };
+
 enum class DrawCmdType {
     Rectangle,        
     RoundedRect, 
@@ -17,13 +19,27 @@ enum class DrawCmdType {
     PushTransform, // Phase 7
     PopTransform,  // Phase 7
     PushClip,      // Phase 8
-    PopClip        // Phase 8
+    PopClip,       // Phase 8
+    Path           // Phase 14
+};
+
+// Phase 25: Advanced Composition
+enum class BlendMode {
+    SourceOver, // Default
+    SourceIn, SourceOut, SourceAtop,
+    DestOver, DestIn, DestOut, DestAtop,
+    Xor, Plus, Multiply, Screen, Overlay, Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion
 };
 
 struct DrawCmd {
     DrawCmdType type;
+    BlendMode blend = BlendMode::SourceOver; 
+    
+    // Phase 14: Use a shared pointer or index for complex path data to keep DrawCmd small
+    // For now, let's use a pointer for simplicity in this turn.
     
     union {
+        // ... previous members ...
         struct {
             float pos_x, pos_y;      
             float size_x, size_y;    
@@ -36,7 +52,10 @@ struct DrawCmd {
             float size_x, size_y;     
             float radius;             
             float color_r, color_g, color_b, color_a;
-            float elevation;          
+            float elevation;
+            bool is_squircle;     // Phase 21
+            float backdrop_blur;  // Phase 21
+            float wobble_x, wobble_y; // Phase 40: Liquid Glass
         } rounded_rect;
         
         struct {
@@ -69,6 +88,15 @@ struct DrawCmd {
         } bezier;
         
         struct {
+            Rectangle rect;
+            uint32_t color;
+            float radius;
+            bool is_squircle; // Phase 21
+            float backdrop_blur; // Phase 21
+            float wobble_x, wobble_y;
+        } rect;
+
+        struct {
             float tx, ty;
             float scale;
         } transform;
@@ -76,15 +104,23 @@ struct DrawCmd {
         struct {
             float x, y, w, h;
         } clip;
+
+        struct {
+            void* path_data; // Points to internal::Path
+        } path;
     };
 };
 
 struct DrawList {
     std::vector<DrawCmd> commands;
     std::vector<TextRun> text_runs; 
+    std::vector<Path> paths; // Phase 14
+    BlendMode current_blend = BlendMode::SourceOver;
+
+    void set_blend_mode(BlendMode mode) { current_blend = mode; }
     
-    void add_rect(const Vec2& pos, const Vec2& size, const ColorF& c, float elevation=0); 
-    void add_rounded_rect(const Vec2& pos, const Vec2& size, float r, const ColorF& c, float elevation=0);
+    void add_rect(const Vec2& pos, const Vec2& size, const ColorF& c, float elevation=0, const Vec2& wobble={0,0}); 
+    void add_rounded_rect(const Vec2& pos, const Vec2& size, float r, const ColorF& c, float elevation=0, bool squircle=false, float blur=0, const Vec2& wobble={0,0});
     void add_circle(const Vec2& center, float r, const ColorF& c, float elevation=0);
     void add_line(const Vec2& p0, const Vec2& p1, float thickness, const ColorF& c);
     void add_text(const TextRun& run, const ColorF& c); 
@@ -97,7 +133,8 @@ struct DrawList {
     // Phase 8
     void push_clip(const Vec2& pos, const Vec2& size);
     void pop_clip();    
-    void clear() { commands.clear(); text_runs.clear(); }
+    void add_path(const Path& path);
+    void clear() { commands.clear(); text_runs.clear(); paths.clear(); }
     size_t size() const { return commands.size(); }
     bool empty() const { return commands.empty(); }
 };

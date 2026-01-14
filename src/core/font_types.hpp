@@ -31,6 +31,8 @@ namespace internal {
     struct TextRun {
         FontID font_id = 0;
         float font_size = 0;
+        float offset_x = 0;
+        float offset_y = 0;
         std::vector<GlyphQuad> quads;
         Rectangle bounds = {0,0,0,0}; // Total bounding box of the run
         

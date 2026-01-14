@@ -1,16 +1,134 @@
 #ifdef FANTA_USE_D3D11
 
-#include "backend/d3d11_backend.hpp"
+#include "backend_factory.hpp" 
 #include "core/types_internal.hpp"
 #include "backend/drawlist.hpp"
 #include <iostream>
 #include <string>
+#include <vector>
+#include <algorithm>
+#include <cmath>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
 
+// --- Windows SDK Headers ---
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <d3d11.h>
+#include <d2d1.h>
+#include <d2d1_1.h> // Added for D3D11Texture
+#include <d2d1helper.h>
+#include <dwrite.h>
+#include <wrl/client.h>
+
+// Helper for Screenshot
+#include "stb_image_write.h"
+
 namespace fanta {
+
+// D3D11 Implementation of GpuTexture
+class D3D11Texture : public internal::GpuTexture {
+public:
+    D3D11Texture(ID3D11Device* device, int w, int h, internal::TextureFormat fmt) : w_(w), h_(h), format_(fmt) {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = w;
+        desc.Height = h;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = (fmt == internal::TextureFormat::R8) ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        
+        device->CreateTexture2D(&desc, nullptr, &texture_);
+        device->CreateShaderResourceView(texture_, nullptr, &srv_);
+    }
+    
+    ~D3D11Texture() {
+        if (srv_) srv_->Release();
+        if (texture_) texture_->Release();
+    }
+    
+    void upload(const void* data, int w, int h) override {
+        // Since we don't store context in D3D11Texture, 
+        // we might need to use a static context or pass it.
+        // For simplicity, we use the device to get the immediate context 
+        // or just accept that upload will be implemented properly in Phase 30.
+        (void)data; (void)w; (void)h;
+    }
+    
+    uint64_t get_native_handle() const override { return (uint64_t)srv_; }
+    int width() const override { return w_; }
+    int height() const override { return h_; }
+
+private:
+    ID3D11Texture2D* texture_ = nullptr;
+    ID3D11ShaderResourceView* srv_ = nullptr;
+    int w_, h_;
+    internal::TextureFormat format_;
+};
+
+using Microsoft::WRL::ComPtr;
+
+// --- Class Definition (Moved from Header) ---
+class D3D11Backend : public Backend {
+    // Window Handle (HWND)
+    void* hwnd = nullptr; 
+
+    // D3D11 Resources
+    ComPtr<ID3D11Device> d3d_device;
+    ComPtr<ID3D11DeviceContext> d3d_context;
+    ComPtr<IDXGISwapChain> swap_chain;
+    
+    // D2D Resources (Interop)
+    ComPtr<ID2D1Factory> d2d_factory;
+    ComPtr<ID2D1RenderTarget> d2d_target;
+    ComPtr<ID2D1SolidColorBrush> solid_brush;
+    
+    // DirectWrite
+    ComPtr<IDWriteFactory> dwrite_factory;
+
+    // State
+    int width = 0;
+    int height = 0;
+
+    bool init_d3d(void* native_window);
+    void cleanup_d3d();
+    void create_render_target();
+
+public:
+    D3D11Backend();
+    ~D3D11Backend();
+
+    bool init(int w, int h, const char* title) override; // Explicit override
+    void shutdown() override;
+    bool is_running() override; 
+    void begin_frame(int w, int h) override;
+    void end_frame() override;
+    void render(const internal::DrawList& draw_list) override;
+    void get_mouse_state(float& x, float& y, bool& down, float& wheel) override;
+    
+    // Resource Creation
+    internal::GpuTexturePtr create_texture(int w, int h, internal::TextureFormat format) override;
+
+    Capabilities capabilities() const override { return { false }; }
+    
+    // Internal helper remains public in this scope but hidden from outside
+    bool capture_screenshot(const char* filename);
+};
+
+
+// --- Factory Implementation ---
+std::unique_ptr<Backend> CreateD3D11Backend() {
+    return std::make_unique<D3D11Backend>();
+}
+
+
+// --- Implementation ---
 
 // Simple Win32 Window for Preview
 static float g_mouse_wheel_accum = 0; // Phase 8
@@ -191,22 +309,15 @@ void D3D11Backend::render(const internal::DrawList& draw_list) {
             const auto& run = draw_list.text_runs[cmd.text.run_index];
             if (run.original_text.empty()) continue;
             
-            // On-the-fly layout for preview (Inefficient but fine for debugging)
             ComPtr<IDWriteTextFormat> fmt;
             dwrite_factory->CreateTextFormat(
                 L"Segoe UI", NULL, 
                 DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
                 run.font_size, L"en-us", &fmt);
             
-            // This is "Preview" mode - We just dump the text at the position
-            // We need the string from TextRun.
-            // Requirement update: TextRun needs to store 'std::string original_text' for this backend!
-            // 'gl' backend uses Quads. 'd2d' backend uses String.
-            // Let's assume TextRun has it. Wait, I need to check font_types.hpp or add it.
-            
             std::wstring wtext(run.original_text.begin(), run.original_text.end());
             
-            D2D1_RECT_F layoutRect = D2D1::RectF(run.bounds.x, run.bounds.y, run.bounds.x + 1000, run.bounds.y + 1000); // unbounded
+            D2D1_RECT_F layoutRect = D2D1::RectF(run.bounds.x, run.bounds.y, run.bounds.x + 1000, run.bounds.y + 1000); 
             
             solid_brush->SetColor(D2D1::ColorF(cmd.text.color_r, cmd.text.color_g, cmd.text.color_b, cmd.text.color_a));
             d2d_target->DrawText(
@@ -217,7 +328,6 @@ void D3D11Backend::render(const internal::DrawList& draw_list) {
             );
         } else if (cmd.type == internal::DrawCmdType::PushTransform) {
              D2D1_MATRIX_3X2_F current = transform_stack.back();
-             // Scale then Translate
              D2D1_MATRIX_3X2_F local = D2D1::Matrix3x2F::Scale(
                  D2D1::Size(cmd.transform.scale, cmd.transform.scale), D2D1::Point2F(0,0)) *
                  D2D1::Matrix3x2F::Translation(cmd.transform.tx, cmd.transform.ty);
@@ -260,7 +370,6 @@ void D3D11Backend::render(const internal::DrawList& draw_list) {
     }
 }
 
-// Phase 6.1
 void D3D11Backend::get_mouse_state(float& x, float& y, bool& down, float& wheel) {
     if (!hwnd) { x=0; y=0; down=false; wheel=0; return; }
     POINT p;
@@ -272,17 +381,15 @@ void D3D11Backend::get_mouse_state(float& x, float& y, bool& down, float& wheel)
         x = 0; y = 0;
     }
     // Check left mouse button
-    // 0x8000 = Currently pressed
     down = (::GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     
     wheel = g_mouse_wheel_accum;
     g_mouse_wheel_accum = 0;
 } 
 
-// Phase 5.2: Screenshot implementation
-// Needs stb_image_write (assumed available from global include or needs re-include)
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
+internal::GpuTexturePtr D3D11Backend::create_texture(int w, int h, internal::TextureFormat format) {
+    return std::make_shared<D3D11Texture>(d3d_device.Get(), w, h, format);
+}
 
 bool D3D11Backend::capture_screenshot(const char* filename) {
     if (!swap_chain || !d3d_device || !d3d_context) return false;
@@ -323,8 +430,6 @@ bool D3D11Backend::capture_screenshot(const char* filename) {
     uint8_t* dst_row = rgba_data.data();
 
     // D3D11 reads top-left to bottom-right (no Y-flip needed unlike OpenGL)
-    // But DXGI format is usually B8G8R8A8_UNORM
-    
     for (UINT y = 0; y < desc.Height; ++y) {
         for (UINT x = 0; x < desc.Width; ++x) {
             uint8_t b = src_row[x * 4 + 0];

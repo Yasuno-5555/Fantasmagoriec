@@ -1,10 +1,8 @@
 #include "text/glyph_cache.hpp"
 #include "text/font_manager.hpp"
+#include "backend/backend.hpp"
 #include <iostream>
 #include <cstring>
-
-// Include GLAD for OpenGL calls
-#include <glad/gl.h>
 
 namespace fanta {
 namespace internal {
@@ -19,37 +17,25 @@ namespace internal {
         pixels.resize(ATLAS_WIDTH * ATLAS_HEIGHT, 0);
     }
 
-    void GlyphCache::init() {
-        // Create OpenGL Texture
-        glGenTextures(1, &texture_id);
-        glBindTexture(GL_TEXTURE_2D, texture_id);
-        
-        // Single channel (Red) for SDF
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS_WIDTH, ATLAS_HEIGHT, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-        
-        // Linear filtering is CRITICAL for SDF
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        
-        glBindTexture(GL_TEXTURE_2D, 0);
+    void GlyphCache::init(Backend* backend) {
+        if (!backend) return;
+        texture = backend->create_texture(ATLAS_WIDTH, ATLAS_HEIGHT, TextureFormat::R8);
     }
 
-    bool GlyphCache::get_glyph_uv(FontID font, uint32_t codepoint, 
+    bool GlyphCache::get_glyph_uv(FontID font, uint32_t glyph_index, 
                                   float& u0, float& v0, float& u1, float& v1,
-                                  float& atlas_w, float& atlas_h) {
+                                  float& glyph_w, float& glyph_h, float& glyph_advance) {
         
-        atlas_w = (float)ATLAS_WIDTH;
-        atlas_h = (float)ATLAS_HEIGHT;
-        
-        CacheKey key = { font, codepoint };
+        CacheKey key = { font, glyph_index };
         auto it = cache.find(key);
         
         if (it != cache.end()) {
             const CachedGlyph& g = it->second;
             u0 = g.u0; v0 = g.v0;
             u1 = g.u1; v1 = g.v1;
+            glyph_w = g.px_w;
+            glyph_h = g.px_h;
+            glyph_advance = g.px_adv;
             return true;
         }
         
@@ -57,7 +43,7 @@ namespace internal {
         std::vector<uint8_t> sdf_buffer;
         int w, h;
         
-        if (!FontManager::Get().generate_sdf(font, codepoint, SDF_SIZE, sdf_buffer, w, h)) {
+        if (!FontManager::Get().generate_sdf(font, glyph_index, SDF_SIZE, sdf_buffer, w, h)) {
             return false;
         }
         
@@ -96,6 +82,11 @@ namespace internal {
         CachedGlyph g;
         g.px_w = (float)w;
         g.px_h = (float)h;
+        
+        // Phase 12: Get true advance from FreeType
+        const auto& metrics = FontManager::Get().get_metrics(font, glyph_index);
+        g.px_adv = metrics.advance;
+
         g.u0 = (float)x / ATLAS_WIDTH;
         g.v0 = (float)y / ATLAS_HEIGHT;
         g.u1 = (float)(x + w) / ATLAS_WIDTH;
@@ -105,20 +96,17 @@ namespace internal {
         
         u0 = g.u0; v0 = g.v0;
         u1 = g.u1; v1 = g.v1;
+        glyph_w = g.px_w;
+        glyph_h = g.px_h;
+        glyph_advance = g.px_adv;
         
         return true;
     }
 
     void GlyphCache::update_texture() {
-        if (!is_dirty || texture_id == 0) return;
+        if (!is_dirty || !texture) return;
         
-        glBindTexture(GL_TEXTURE_2D, texture_id);
-        
-        // Upload entire buffer for simplicity (Phase 4)
-        // Optimization: use glTexSubImage2D for the new region only
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ATLAS_WIDTH, ATLAS_HEIGHT, GL_RED, GL_UNSIGNED_BYTE, pixels.data());
-        
-        glBindTexture(GL_TEXTURE_2D, 0);
+        texture->upload(pixels.data(), ATLAS_WIDTH, ATLAS_HEIGHT);
         is_dirty = false;
     }
 

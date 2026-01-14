@@ -49,7 +49,7 @@ private:
     );
 
     // Layout children in flexbox manner
-    void layout_children(
+    Vec2 layout_children(
         const ::fanta::internal::ElementState& parent,
         const std::vector<::fanta::internal::ID>& child_ids,
         const std::vector<::fanta::internal::ElementState>& elements,

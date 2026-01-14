@@ -9,11 +9,11 @@ namespace internal {
     class TextLayout {
     public:
         // Main function: Convert string to positioned quads (TextRun)
-        static TextRun transform(const std::string& text, FontID font_id, float font_size);
+        static TextRun transform(const std::string& text, FontID font_id, const TypographyRule& rule);
+        static TextRun transform_wrapped(const std::string& text, FontID font_id, const TypographyRule& rule, float max_width);
         
         // Measure text without creating full quads
-        // Added unused params max_width/line_height to match usage in layout.cpp
-        static Vec2 measure(const std::string& text, FontID font_id, float font_size, float max_width = 0, float line_height = 0);
+        static Vec2 measure(const std::string& text, FontID font_id, const TypographyRule& rule, float max_width = 0);
     };
 
 } // namespace internal
