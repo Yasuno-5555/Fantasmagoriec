@@ -1,0 +1,7 @@
+[Fanta] Init V5 Minimal
+[Fanta] OpenGL Initialized
+[Fanta] Version: 3.3.0 NVIDIA 581.29
+[Fanta] Vendor: NVIDIA Corporation
+[Fanta] Renderer: NVIDIA GeForce RTX 3070/PCIe/SSE2
+[Fanta] glBindTexture Address: 00007ffca2109b60
+[Fanta] Shutdown V5

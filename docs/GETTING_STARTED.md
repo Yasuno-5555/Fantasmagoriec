@@ -1,75 +1,65 @@
-# Getting Started with Fantasmagorie Crystal
+# Getting Started with Fantasmagorie V5 Crystal
 
 ## Prerequisites
 
-- **Operaing System**: Windows 10/11, macOS 12+, or Modern Linux (Ubuntu 22.04+).
-- **Compiler**: C++20 compliant compiler.
-    - Windows: MSVC (Visual Studio 2022 v17.0+)
-    - Linux: GCC 11+ or Clang 14+
-    - macOS: Apple Clang 14+ (Xcode 14)
-- **Build System**: CMake 3.20+
-- **Tools**: Git
+- **Python 3.10+**: Recommended for rapid UI iteration.
+- **C++20 Compiler**: MinGW (Windows), GCC, or Clang.
+- **CMake 3.20+**
 
-## 1. Cloning the Repository
+## 🐍 The Serpent Path (Recommended)
 
+The fastest way to start is using the Python hot-reload environment.
+
+1. **Build the Engine**:
 ```bash
-git clone --recursive https://github.com/Yasuno-5555/Fantasmagoriec.git
-cd Fantasmagoriec
-```
-
-> **Note**: The `--recursive` flag is critical to pull in dependencies like GLFW and pure-cpp-math libraries.
-
-## 2. Building
-
-Fantasmagorie works best with standard CMake workflows.
-
-### Windows (Visual Studio)
-
-```powershell
-mkdir build
-cd build
+mkdir build && cd build
 cmake ..
-cmake --build . --config Release
+mingw32-make fanta  # or make fanta
 ```
 
-### Linux / macOS (Unix Makefiles)
-
+2. **Run the Ouroboros Runner**:
 ```bash
-mkdir build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j4
+python ../src/python/hot_reload_runner.py
 ```
 
-## 3. Creating Your First App
+3. **Design Live**:
+Open `src/python/test_ui.py` and start editing. The UI will update the moment you save!
 
-Create a new `.cpp` file (e.g., `myapp.cpp`) and link it against `fanta`:
+---
+
+## 💎 The Crystal Path (C++ Native)
+
+For high-performance native apps, use the C++ View API.
 
 ```cpp
-#include "fanta.h"
+#include "view/api.hpp"
 
 int main() {
-    // 1024x768 window titled "Hello"
-    fanta::Init(1024, 768, "Hello");
-    fanta::SetTheme(fanta::Theme::Dark());
+    fanta::Init(1280, 800, "V5 Native");
 
-    fanta::Run([]() {
-        fanta::Element root("root");
-        root.size(1024, 768).bg(fanta::Color::SystemBackground());
+    fanta::RunWithUI([](fanta::internal::DrawList& dl) {
+        using namespace fanta::ui;
         
-        fanta::Element text("msg");
-        text.label("Hello World").color(fanta::Color::Label()).fontSize(32);
+        // Stateless UI Definition
+        auto root = Column().width(1280).height(800).bg({0.1, 0.1, 0.1, 1}).padding(20);
+        {
+            Text("Hello Crystal").size(40).color({1,1,1,1});
+            if (Button("Interactive").radius(10).shadow(15)) {
+                printf("Button Clicked!\n");
+            }
+        }
+        End(); // Close Column
         
-        root.child(text);
+        // Render step
+        RenderUI(root, 1280, 800, dl);
     });
-
-    fanta::Shutdown();
 }
 ```
 
-## 4. Running Demos
-
-The project comes with several demos to showcase capabilities:
-
-- **Rich Demo** (`rich_demo`): Showcases specialized UI cards, Glassmorphism, and Themes.
-- **Wire Demo** (`wire_demo`): Demonstrates the Node Graph and Wire connection system.
+## 🛠 Troubleshooting: Windows DLLs
+If `fanta` fails to import in Python, ensure your MinGW `bin` directory is in the DLL search path:
+```python
+import os
+os.add_dll_directory("C:/mingw64/bin")
+```
+This is handled automatically in the provided `hot_reload_runner.py`.

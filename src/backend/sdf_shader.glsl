@@ -24,13 +24,14 @@ void main() {
     vec2 physical_pos = aPos * uDevicePixelRatio;
     vec2 physical_size = aSize * uDevicePixelRatio;
     
-    // NDC座標変換
-    vec2 ndc = (physical_pos + aPos * 0.0) / uViewportSize * 2.0 - 1.0;
+    // NDC座標変換: 論理座標(aPos)からNDC座標へ
+    // viewportSizeは物理ピクセルなので、物理座標を使う
+    vec2 ndc = physical_pos / uViewportSize * 2.0 - 1.0;
     ndc.y = -ndc.y; // Flip Y
     
     gl_Position = vec4(ndc, 0.0, 1.0);
     
-    // Pass to fragment shader
+    // Pass to fragment shader (物理ピクセル単位)
     vPos = physical_pos;
     vSize = physical_size;
     vColor = aColor;
@@ -100,12 +101,15 @@ void main() {
         // Circle
         dist = sdf_circle(p, vRadius);
     } else if (vShapeType == 3) {
-        // Line (simplified - would need p0, p1 passed)
-        dist = sdf_rect(p, vSize * 0.5);
+        // Line: vPosからvPos+vSizeへの線分、vRadiusを太さとして使用
+        vec2 p0 = vPos;
+        vec2 p1 = vPos + vSize;
+        dist = sdf_line(frag_coord, p0, p1, vRadius);
     }
     
-    // Edge AA (1px smooth step)
-    float alpha = smooth_edge(dist, 1.0);
+    // Edge AA (DPI対応: 物理1pxでスムージング)
+    float edge_width = max(1.0, 1.0 / uDevicePixelRatio);
+    float alpha = smooth_edge(dist, edge_width);
     
     FragColor = vec4(vColor.rgb, vColor.a * alpha);
 }

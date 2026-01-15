@@ -1,7 +1,7 @@
 #include "text/text_layout.hpp"
 #include "text/glyph_cache.hpp" 
 #include "text/text_shaper.hpp"
-#include "core/types_internal.hpp"
+#include "core/contexts_internal.hpp"
 
 namespace fanta {
 namespace internal {

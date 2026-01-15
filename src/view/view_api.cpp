@@ -1,6 +1,6 @@
 #include "fanta_views.h"
 #include "core/contexts_internal.hpp"
-#include "core/types_internal.hpp"
+#include "core/contexts_internal.hpp"
 
 #include <initializer_list>
 #include <algorithm>

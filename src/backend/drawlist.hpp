@@ -1,143 +1,172 @@
 #pragma once
+// L2: DrawList (Intermediate Representation)
+// Dependencies: types_core.hpp (L1), <vector> ONLY.
+// This file MUST be extractable to a separate project.
 
-#include "core/types_internal.hpp"
-#include "core/font_types.hpp"
+#include "core/types_core.hpp"
 #include <vector>
+#include <cstdint>
 
 namespace fanta {
 namespace internal {
 
-enum class PathOp { MoveTo, LineTo, QuadTo, CubicTo, Close };
-
-enum class DrawCmdType {
-    Rectangle,        
-    RoundedRect, 
-    Circle,      
-    Line,        
-    Text,
-    Bezier,        // Phase 7
-    PushTransform, // Phase 7
-    PopTransform,  // Phase 7
-    PushClip,      // Phase 8
-    PopClip,       // Phase 8
-    Path           // Phase 14
-};
-
-// Phase 25: Advanced Composition
-enum class BlendMode {
-    SourceOver, // Default
-    SourceIn, SourceOut, SourceAtop,
-    DestOver, DestIn, DestOut, DestAtop,
-    Xor, Plus, Multiply, Screen, Overlay, Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion
-};
-
-struct DrawCmd {
-    DrawCmdType type;
-    BlendMode blend = BlendMode::SourceOver; 
+    // --- Path Types ---
+    enum class PathVerb { MoveTo, LineTo, QuadTo, CubicTo, Close };
     
-    // Phase 14: Use a shared pointer or index for complex path data to keep DrawCmd small
-    // For now, let's use a pointer for simplicity in this turn.
-    
-    union {
-        // ... previous members ...
-        struct {
-            float pos_x, pos_y;      
-            float size_x, size_y;    
-            float color_r, color_g, color_b, color_a;
-            float elevation;          
-        } rectangle;
-        
-        struct {
-            float pos_x, pos_y;      
-            float size_x, size_y;     
-            float radius;             
-            float color_r, color_g, color_b, color_a;
-            float elevation;
-            bool is_squircle;     // Phase 21
-            float backdrop_blur;  // Phase 21
-            float wobble_x, wobble_y; // Phase 40: Liquid Glass
-        } rounded_rect;
-        
-        struct {
-            float center_x, center_y; 
-            float r;                  
-            float color_r, color_g, color_b, color_a;
-            float elevation;          
-        } circle;
-        
-        struct {
-            float p0_x, p0_y;         
-            float p1_x, p1_y;         
-            float thickness;           
-            float color_r, color_g, color_b, color_a;
-        } line;
-
-        struct {
-            uint32_t run_index; 
-            float color_r, color_g, color_b, color_a;
-        } text;
-        
-        // Phase 7: Node Graph Primitives
-        struct {
-            float p0_x, p0_y;
-            float p1_x, p1_y;
-            float p2_x, p2_y;
-            float p3_x, p3_y;
-            float thickness;
-            float color_r, color_g, color_b, color_a;
-        } bezier;
-        
-        struct {
-            Rectangle rect;
-            uint32_t color;
-            float radius;
-            bool is_squircle; // Phase 21
-            float backdrop_blur; // Phase 21
-            float wobble_x, wobble_y;
-        } rect;
-
-        struct {
-            float tx, ty;
-            float scale;
-        } transform;
-
-        struct {
-            float x, y, w, h;
-        } clip;
-
-        struct {
-            void* path_data; // Points to internal::Path
-        } path;
+    struct PathPoint {
+        PathVerb verb;
+        Vec2 p0, p1, p2;
     };
-};
+    
+    struct Path {
+        std::vector<PathPoint> points;
+        float stroke_width = 1.0f;
+        bool is_fill = false;
+        ColorF color;
+    };
 
-struct DrawList {
-    std::vector<DrawCmd> commands;
-    std::vector<TextRun> text_runs; 
-    std::vector<Path> paths; // Phase 14
-    BlendMode current_blend = BlendMode::SourceOver;
+    // --- Text Run (Font Metrics) ---
+    // Forward declaration to break circular dependency
+    struct TextRun;
+    using FontID = uint32_t;
 
-    void set_blend_mode(BlendMode mode) { current_blend = mode; }
-    
-    void add_rect(const Vec2& pos, const Vec2& size, const ColorF& c, float elevation=0, const Vec2& wobble={0,0}); 
-    void add_rounded_rect(const Vec2& pos, const Vec2& size, float r, const ColorF& c, float elevation=0, bool squircle=false, float blur=0, const Vec2& wobble={0,0});
-    void add_circle(const Vec2& center, float r, const ColorF& c, float elevation=0);
-    void add_line(const Vec2& p0, const Vec2& p1, float thickness, const ColorF& c);
-    void add_text(const TextRun& run, const ColorF& c); 
-    
-    // Phase 7
-    void add_bezier(const Vec2& p0, const Vec2& p1, const Vec2& p2, const Vec2& p3, float thickness, const ColorF& c);
-    void push_transform(const Vec2& translate, float scale);
-    void pop_transform(); 
-    
-    // Phase 8
-    void push_clip(const Vec2& pos, const Vec2& size);
-    void pop_clip();    
-    void add_path(const Path& path);
-    void clear() { commands.clear(); text_runs.clear(); paths.clear(); }
-    size_t size() const { return commands.size(); }
-    bool empty() const { return commands.empty(); }
-};
+    // --- Blend Mode ---
+    enum class BlendMode {
+        SourceOver,
+        SourceIn, SourceOut, SourceAtop,
+        DestOver, DestIn, DestOut, DestAtop,
+        Xor, Plus, Multiply, Screen, Overlay,
+        Darken, Lighten, ColorDodge, ColorBurn,
+        HardLight, SoftLight, Difference, Exclusion
+    };
+
+    // --- Draw Command ---
+    enum class DrawCmdType {
+        Rectangle,
+        RoundedRect,
+        Circle,
+        Line,
+        Text,
+        Glyph,
+        Bezier,
+        BlurRect,
+        PushTransform,
+        PopTransform,
+        PushClip,
+        PopClip,
+        Path
+    };
+
+    struct DrawCmd {
+        DrawCmdType type;
+        BlendMode blend = BlendMode::SourceOver;
+        
+        union {
+            struct {
+                float pos_x, pos_y;
+                float size_x, size_y;
+                float color_r, color_g, color_b, color_a;
+                float elevation;
+            } rectangle;
+            
+            struct {
+                float pos_x, pos_y;
+                float size_x, size_y;
+                float radius;
+                float color_r, color_g, color_b, color_a;
+                float elevation;
+                bool is_squircle;
+                float backdrop_blur;
+                float wobble_x, wobble_y;
+            } rounded_rect;
+            
+            struct {
+                float center_x, center_y;
+                float r;
+                float color_r, color_g, color_b, color_a;
+                float elevation;
+            } circle;
+            
+            struct {
+                float p0_x, p0_y;
+                float p1_x, p1_y;
+                float thickness;
+                float color_r, color_g, color_b, color_a;
+            } line;
+            
+            struct {
+                uint32_t run_index;
+                float color_r, color_g, color_b, color_a;
+            } text;
+
+            struct {
+                float pos_x, pos_y;
+                float size_x, size_y;
+                float u0, v0, u1, v1;
+                float color_r, color_g, color_b, color_a;
+            } glyph;
+            
+            struct {
+                float p0_x, p0_y;
+                float p1_x, p1_y;
+                float p2_x, p2_y;
+                float p3_x, p3_y;
+                float thickness;
+                float color_r, color_g, color_b, color_a;
+            } bezier;
+            
+            struct {
+                float pos_x, pos_y;
+                float size_x, size_y;
+                float radius;
+                float strength;
+            } blur_rect;
+            
+            struct {
+                float tx, ty;
+                float scale;
+            } transform;
+            
+            struct {
+                float x, y, w, h;
+            } clip;
+            
+            struct {
+                uint32_t path_index;
+            } path_cmd;
+        };
+    };
+
+    // --- DrawList ---
+    struct DrawList {
+        DrawList();
+        ~DrawList();
+
+        std::vector<DrawCmd> commands;
+        std::vector<TextRun> text_runs;
+        std::vector<Path> paths;
+        BlendMode current_blend = BlendMode::SourceOver;
+
+        void set_blend_mode(BlendMode mode) { current_blend = mode; }
+        
+        void add_rect(const Vec2& pos, const Vec2& size, const ColorF& c, float elevation = 0, const Vec2& wobble = {0,0});
+        void add_rounded_rect(const Vec2& pos, const Vec2& size, float r, const ColorF& c, float elevation = 0, bool squircle = false, float blur = 0, const Vec2& wobble = {0,0});
+        void add_circle(const Vec2& center, float r, const ColorF& c, float elevation = 0);
+        void add_line(const Vec2& p0, const Vec2& p1, float thickness, const ColorF& c);
+        void add_text(const TextRun& run, const ColorF& c);
+        void add_text(const Vec2& pos, const Vec2& size, const internal::Vec4& uv, const ColorF& c);
+        void add_bezier(const Vec2& p0, const Vec2& p1, const Vec2& p2, const Vec2& p3, float thickness, const ColorF& c);
+        void add_blur_rect(const Vec2& pos, const Vec2& size, float r, float strength);
+        void push_transform(const Vec2& translate, float scale);
+        void pop_transform();
+        void push_clip(const Vec2& pos, const Vec2& size);
+        void pop_clip();
+        void add_path(const Path& path);
+        
+        void clear();
+        size_t size() const { return commands.size(); }
+        bool empty() const { return commands.empty(); }
+    };
 
 } // namespace internal
 } // namespace fanta

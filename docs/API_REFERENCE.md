@@ -1,49 +1,52 @@
-# API Reference (fanta::Element)
+# API Reference (V5 Crystal)
 
-This is a concise reference for the fluent Builder API used in `fanta::Element`.
+This reference covers the Universal Masquerade API available in both C++ and Python.
 
-## Layout & Sizing
+## 📐 Layout (LayoutConfig)
 
 | Method | Description |
 |--------|-------------|
-| `.size(w, h)` | Sets fixed width and height. |
-| `.width(w)` / `.height(h)` | Sets explicit dimension. |
-| `.row()` | Sets layout direction to Horizontal. |
-| `.column()` | Sets layout direction to Vertical (Default). |
-| `.grow(n)` | Sets Flex Grow factor (e.g., `1.0` to fill remaining space). |
-| `.gap(n)` | Sets gap between children (like CSS gap). |
-| `.padding(n)` | Sets uniform padding. |
+| `.width(w)` / `.height(h)` | Sets explicit pixel dimension. |
+| `.size(w, h)` | Sets both width and height. |
+| `.grow(n)` / `.shrink(n)` | Flexbox growth/shrink factors. |
+| `.padding(n)` | Sets internal padding. |
+| `.margin(n)` | Sets external margin. |
 | `.align(Align)` | Cross-axis alignment (`Start`, `Center`, `End`, `Stretch`). |
-| `.justify(Justify)` | Main-axis alignment (`Start`, `Center`, `SpaceBetween`). |
 
-## Styling
+## 🎨 Styling (StyleConfig)
 
 | Method | Description |
 |--------|-------------|
 | `.bg(Color)` | Sets background color. |
-| `.rounded(r)` | Sets corner radius. |
-| `.elevation(n)` | Sets shadow depth (0-24). |
-| `.backdropBlur(sigma)` | Enables background blur (Glassmorphism). |
-| `.vibrancy(amount)` | Boosts saturation of background content. |
-| `.material(Type)` | Applies preset material style (`UltraThin`, `Chrome`). |
+| `.color(Color)` | Sets foreground/text color. |
+| `.radius(r)` | Sets corner radius (Squircle supported). |
+| `.shadow(depth)` | Sets elevation depth. |
+| `.blur(sigma)` | Sets backdrop blur amount. |
+| `.wobble(x, y)` | Adds interactive micro-vibration. |
+| `.size(fontSize)` | Sets font size (Text/Button only). |
 
-## Typography
+## 📦 Widgets (View Builders)
 
-| Method | Description |
-|--------|-------------|
-| `.label(text)` | Sets the text content. |
-| `.color(Color)` | Sets text color. |
-| `.fontSize(size)` | Sets font size in logical pixels. |
-| `.textStyle(Token)` | Sets semantic style (`Title1`, `Body`, `Caption`). |
+| Function | Description |
+|----------|-------------|
+| `Box()` | Generic container. |
+| `Row()` / `Column()` | Flex containers. |
+| `Text("str")` | Text display. |
+| `Button("label")` | Interactive button. returns `bool` in loop. |
+| `Scroll()` | Scrollable container. |
+| `Splitter(ratio)` | Resizable split container. |
+| `End()` | Closes the current layout group. |
 
-## Interaction
-
-| Method | Description |
-|--------|-------------|
-| `.onClick(callback)` | Registers a click handler `std::function<void()>`. |
-| `.hoverBg(Color)` | Sets background color when hovered. |
-| `.activeBg(Color)` | Sets background color when pressed. |
-| `.focusable(bool)` | Makes the element capable of receiving keyboard focus. |
+## 🐍 Python Specifics
+In Python, all methods are available on the widget objects returned by the builder functions:
+```python
+fanta.Text("Hello").size(32).color(fanta.Color(1,1,1))
+```
+Interactive widgets can be checked directly:
+```python
+if fanta.Button("Save").bg(fanta.Color(0,1,0)):
+    save_data()
+```
 
 ## Node Graph
 

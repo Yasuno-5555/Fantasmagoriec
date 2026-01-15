@@ -1,6 +1,6 @@
 #include "fanta.h"
 #include "core/contexts_internal.hpp"
-#include "core/types_internal.hpp"
+#include "core/contexts_internal.hpp"
 #include "backend/backend_factory.hpp" 
 #include "backend/drawlist.hpp"
 #include "text/font_manager.hpp"

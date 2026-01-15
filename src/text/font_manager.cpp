@@ -98,7 +98,7 @@ namespace internal {
         // If compilation fails here, we know the environment is too old.
         // But FetchContent master should be fine.
         if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF)) {
-            std::cerr << "Failed to render SDF for char " << codepoint << std::endl;
+            std::cerr << "Failed to render SDF for glyph " << glyph_index << std::endl;
             return false;
         }
 
@@ -120,18 +120,26 @@ namespace internal {
         return true;
     }
 
-    FontID FontManager::find_font_for_char(uint32_t codepoint) {
-        // 1. Check fallback stack first if populated
+    std::pair<FontID, uint32_t> FontManager::get_glyph_index(uint32_t codepoint) {
+        // 1. Try primary font (0)
+        if (faces.empty()) return {0, 0};
+        
+        uint32_t idx = FT_Get_Char_Index(faces[0], codepoint);
+        if (idx != 0) return {0, idx};
+        
+        // 2. Try fallback stack
         for (FontID id : font_fallback_stack) {
             FT_Face face = get_face(id);
-            if (face && FT_Get_Char_Index(face, codepoint) != 0) return id;
+            if (face) {
+                idx = FT_Get_Char_Index(face, codepoint);
+                if (idx != 0) return {id, idx};
+            }
         }
-        // 2. Check all loaded fonts as a final safety
-        for (size_t i = 0; i < faces.size(); ++i) {
-            if (FT_Get_Char_Index(faces[i], codepoint) != 0) return static_cast<FontID>(i);
-        }
-        return 0; // Default font
+        
+        // 3. Not found, return 0 (Tofu) from primary
+        return {0, 0};
     }
+
 
 } // namespace internal
 } // namespace fanta

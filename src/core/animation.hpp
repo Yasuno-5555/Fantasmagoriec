@@ -1,131 +1,78 @@
 #pragma once
 #include <cmath>
 #include <algorithm>
+#include "core/types_core.hpp"
 
 namespace fanta {
 namespace internal {
 
-enum class CurveType { 
-    Linear, EaseIn, EaseOut, EaseInOut, 
-    ElasticIn, ElasticOut, BounceIn, BounceOut 
-};
-
-struct Curves {
-    static float apply(CurveType type, float t) {
-        switch(type) {
-            case CurveType::EaseIn: return t * t;
-            case CurveType::EaseOut: return t * (2 - t);
-            case CurveType::EaseInOut: return t < 0.5f ? 2 * t * t : -1 + (4 - 2 * t) * t;
-            case CurveType::ElasticOut: {
-                if (t == 0 || t == 1) return t;
-                return std::pow(2.0f, -10.0f * t) * std::sin((t - 0.075f) * (2.0f * 3.14159f) / 0.3f) + 1.0f;
-            }
-            default: return t;
-        }
-    }
-};
-
-template<typename T>
-T Lerp(const T& a, const T& b, float t) {
-    return a * (1.0f - t) + b * t;
-}
-
-// Specialization for Colors in types_internal could be added later
-
-struct SpringConfig {
-    float stiffness;
-    float damping;
-    
-    static SpringConfig Default() { return { 150.0f, 15.0f }; }
-    static SpringConfig Bouncy() { return { 120.0f, 8.0f }; }
-    static SpringConfig Stiff() { return { 300.0f, 25.0f }; }
-};
-
-struct AnimState {
-    float value = 0.0f;
-    float velocity = 0.0f;
-    float target = 0.0f;
-    bool initialized = false;
-    
-    // Bounds for elastic clamping
-    bool has_bounds = false;
-    float min_val = 0.0f;
-    float max_val = 0.0f;
-    
-    void init(float v) {
-        if (!initialized) {
-            value = target = v;
-            velocity = 0.0f;
-            initialized = true;
-        }
-    }
-    
-    void set_bounds(float min, float max) {
-        has_bounds = true;
-        min_val = min;
-        max_val = max;
-    }
-    
-    void update(float dt, const SpringConfig& config) {
-        if (dt <= 0.0f) return;
-        if (dt > 0.1f) dt = 0.1f; // Cap dt for stability
-
-        // Physics step (semi-implicit Euler)
-        float displacement = value - target;
-        float force = -config.stiffness * displacement - config.damping * velocity;
+    // Stateless Animation: ID -> State
+    struct AnimationState {
+        // We support animating up to 4 float values per ID (e.g. RGBA, Rect, or just one float)
+        // For simplicity in Phase N, let's target RGBA Color transitions.
         
-        // Elastic clamping force if outside bounds
-        if (has_bounds) {
-            if (value < min_val) {
-                float dist = min_val - value;
-                force += dist * config.stiffness * 2.0f; // Extra stiff pull back
-            } else if (value > max_val) {
-                float dist = value - max_val;
-                force -= dist * config.stiffness * 2.0f;
+        float current[4] = {0,0,0,0};
+        float target[4] = {0,0,0,0};
+        float velocity[4] = {0,0,0,0}; // For spring
+        
+        bool active = false; // Is currently animating?
+        
+        // Configuration
+        float stiffness = 150.0f;
+        float damping = 20.0f;
+        float mass = 1.0f;
+        
+        // Helper to set target (wakes up animation if changed)
+        void set_target(float v0, float v1, float v2, float v3) {
+            float eps = 0.001f;
+            if (std::abs(target[0] - v0) > eps || 
+                std::abs(target[1] - v1) > eps || 
+                std::abs(target[2] - v2) > eps || 
+                std::abs(target[3] - v3) > eps) {
+                
+                target[0] = v0; target[1] = v1; target[2] = v2; target[3] = v3;
+                active = true;
             }
         }
-
-        velocity += force * dt;
-        value += velocity * dt;
         
-        // Snap to target if very close and inside bounds
-        bool inside = !has_bounds || (value >= min_val && value <= max_val);
-        if (inside && std::abs(value - target) < 0.01f && std::abs(velocity) < 0.01f) {
-            value = target;
-            velocity = 0.0f;
+        // Update Step (Spring Physics)
+        void update(float dt) {
+            if (!active) return;
+            
+            bool still_moving = false;
+            float eps = 0.001f;
+            
+            for (int i = 0; i < 4; ++i) {
+                // Spring force: F = -k(x - target)
+                float displacement = current[i] - target[i];
+                float force = -stiffness * displacement;
+                
+                // Damping force: F_d = -c * velocity
+                float damp = -damping * velocity[i];
+                
+                // Acceleration: a = F / m
+                float accel = (force + damp) / mass;
+                
+                // Euler integration
+                velocity[i] += accel * dt;
+                current[i] += velocity[i] * dt;
+                
+                // Check if settled
+                if (std::abs(displacement) > eps || std::abs(velocity[i]) > eps) {
+                    still_moving = true;
+                } else {
+                    // Snap to target if very close/slow to stop micro-jitter
+                    // But be careful not to snap while others are moving? 
+                    // Individual snapping is generally okay.
+                }
+            }
+            
+            active = still_moving;
+            if (!active) {
+                for(int i=0; i<4; ++i) { current[i] = target[i]; velocity[i] = 0; }
+            }
         }
-    }
-};
+    };
 
-enum class ConstraintType { Distance, MinDistance, MaxDistance, StayTop, StayBottom };
-
-struct PhysicsConstraint {
-    AnimState* a;
-    AnimState* b;
-    ConstraintType type;
-    float param = 0.0f;
-    
-    void solve() {
-        if (!a || !b) return;
-        switch(type) {
-            case ConstraintType::Distance:
-                b->target = a->value + param;
-                break;
-            case ConstraintType::MinDistance:
-                if (b->value < a->value + param) b->target = a->value + param;
-                break;
-            case ConstraintType::MaxDistance:
-                if (b->value > a->value + param) b->target = a->value + param;
-                break;
-            case ConstraintType::StayTop:
-                if (b->value < param) b->target = param;
-                break;
-            case ConstraintType::StayBottom:
-                if (b->value > param) b->target = param;
-                break;
-        }
-    }
-};
-
-} // internal
-} // fanta
+} // namespace internal
+} // namespace fanta

@@ -1,83 +1,198 @@
 #pragma once
-#include "types_internal.hpp"
-#include "memory.hpp"
-#include "input.hpp"
-#include "../backend/backend.hpp"
+// L4: Context Structures
+// Dependencies: types_core.hpp (L1), types_fwd.hpp (L0), <memory>, <vector>, <map>
+// Knows: Backend*, but NOT DrawList internals.
+
+#include "core/types_core.hpp"
+#include "core/types_fwd.hpp"
+#include <memory>
 #include <vector>
 #include <map>
-#include <memory>
+#include <cstring>
+#include "core/animation.hpp"
 
 namespace fanta {
+
+// Forward declaration - defined in backend.hpp
+class Backend;
+
 namespace internal {
 
-    // Forward decls
-    struct StateStore;  // Defined in types_internal.hpp (Legacy for now)
-    
-    // V5: Persistent World State
-    // Lives for the entire application duration.
-    struct WorldState {
-        // Theme config
-        Theme current_theme;
+    // --- Frame Arena (Simplified) ---
+    class FrameArena {
+    public:
+        static constexpr size_t CAPACITY = 1024 * 1024; // 1MB
         
-        // Persistent Widget State (Animation, Scroll, Text Input)
-        // Currently defined in StateStore (types_internal.hpp) which we will likely move here or wrap.
-        // For Phase 2, we just hold a reference or pointer to the legacy Store if we can't move it yet.
-        // Actually, let's move the ownership of Backend here.
-        std::unique_ptr<fanta::Backend> backend;
+        FrameArena() { buffer_.resize(CAPACITY); }
         
-        // Global Assets (Fonts, Textures) - Managed by singletons currently (FontManager), strictly should be here.
+        void reset() { offset_ = 0; }
         
-        // Window Configuration
-        int window_width = 0;
-        int window_height = 0;
+        template<typename T>
+        T* alloc() {
+            static_assert(std::is_trivially_destructible_v<T>, "FrameArena only for POD types");
+            size_t aligned = (offset_ + alignof(T) - 1) & ~(alignof(T) - 1);
+            if (aligned + sizeof(T) > CAPACITY) return nullptr;
+            T* ptr = reinterpret_cast<T*>(buffer_.data() + aligned);
+            offset_ = aligned + sizeof(T);
+            return new(ptr) T();
+        }
+
+        template<typename T>
+        T* alloc_array(size_t count) {
+            static_assert(std::is_trivially_destructible_v<T>, "FrameArena only for POD types");
+            size_t aligned = (offset_ + alignof(T) - 1) & ~(alignof(T) - 1);
+            size_t size = sizeof(T) * count;
+            if (aligned + size > CAPACITY) return nullptr;
+            T* ptr = reinterpret_cast<T*>(buffer_.data() + aligned);
+            offset_ = aligned + size;
+            for (size_t i = 0; i < count; ++i) new(&ptr[i]) T();
+            return ptr;
+        }
+        
+        char* alloc_string(const char* s) {
+            if (!s) return nullptr;
+            size_t len = strlen(s);
+            char* buf = (char*)alloc_array<char>(len + 1);
+            if (buf) memcpy(buf, s, len + 1);
+            return buf;
+        }
+
+    private:
+        std::vector<uint8_t> buffer_;
+        size_t offset_ = 0;
     };
 
-    // V5: Per-Frame Transient State
-    // Reset at the beginning of every frame.
+    // --- World State (Persistent) ---
+    struct WorldState {
+        std::unique_ptr<Backend> backend;
+        int window_width = 0;
+        int window_height = 0;
+        // Theme is defined elsewhere, just store index/enum here if needed
+    };
+
+    // --- Frame State (Per-Frame Transient) ---
     struct FrameState {
-        // Linear Memory Allocator
         FrameArena arena;
-        
-        // Frame Time
         float dt = 0.016f;
         double time = 0.0;
-        
-        // ID Stack for the current frame build
         std::vector<ID> id_stack;
-        
-        // Layout Results for the current frame (Computed in Layout Phase)
         std::map<ID, ComputedLayout> layout_results;
+        std::vector<ID> parent_stack;  // For implicit parent tracking (Philosophy VII compliant)
         
-        // Render Commands (DrawList is currently separate, but conceptually here)
+        // MenuBar state (Philosophy VII: moved from static global)
+        uint64_t current_menu_bar = 0;
+        uint64_t current_menu = 0;
+        
+        // DragDrop state (Philosophy VII: moved from static global)
+        uint64_t drag_source = 0;
+        void* drag_payload = nullptr;
         
         void reset() {
             arena.reset();
             id_stack.clear();
-            // Note: layout_results are technically "this frame's result", 
-            // but in Immediate Mode we often need "last frame's result" for the current frame's interactions.
-            // This is the classic IMGUI lag.
-            // In V5, we might separate "LayoutResultCache" (Last Frame) from "CurrentLayout" (This Frame).
-            // For now, keep as is (cleared? No, RuntimeState didn't clear it explicitly in BeginFrame, only overlays).
-            // Actually fanta.cpp clears elements but layout results persist? 
-            // Let's check fanta.cpp. It calculates layouts in EndFrame and stores them.
-            // So they are valid for the NEXT frame's "GetLayout"? No, "GetLayout" usually returns last frame.
-            // EndFrame solves layout for *that* frame to render.
+            parent_stack.clear();
+            current_menu_bar = 0;
+            current_menu = 0;
+            drag_source = 0;
+            drag_payload = nullptr;
         }
     };
-    
-    // V5: Thread-Local Runtime Context
-    // Access point for the currently active World and Frame.
-    struct RuntimeContext {
-        WorldState* world = nullptr;
-        FrameState* frame = nullptr;
+
+    // --- Runtime State (Legacy Compat) ---
+    struct RuntimeState {
+        int width = 0;
+        int height = 0;
+        float dt = 0.016f;
+        bool screenshot_pending = false;
+        std::vector<ID> overlay_ids;
+        std::map<ID, ComputedLayout> layout_results;
+        bool debug_hit_test = false;
+        std::vector<ID> id_stack;
         
-        // Legacy Compatibility bridging
-        StateStore* store = nullptr; // Pointer to legacy store
-        InputContext* input = nullptr;
+        // Keyboard navigation (Philosophy VII: moved from static global)
+        bool keyboard_nav_enabled = false;
     };
 
-    // TLS Accessor
-    RuntimeContext& GetContext();
+    // --- Input Context (FACTS ONLY) ---
+    // Per Iron Philosophy XI: "Input は事実であれ、意味になるな"
+    // NO interpretation methods here. No IsClicked, IsPressed, IsDragging.
+    // Just raw facts from the OS.
+    
+    struct InputContext {
+        // Mouse position (facts)
+        float mouse_x = 0;
+        float mouse_y = 0;
+        float mouse_dx = 0;
+        float mouse_dy = 0;
+        
+        // Mouse button state (facts)
+        bool mouse_down = false;      // Current frame: is button held?
+        bool mouse_was_down = false;  // Previous frame: was button held?
+        
+        // Wheel delta (fact)
+        float mouse_wheel = 0;
+        
+        // Keyboard (facts)
+        std::vector<uint32_t> chars;
+        std::vector<int> keys;
+        
+        // IME (facts)
+        bool ime_active = false;          // Is IME currently composing?
+        std::string ime_composition;      // Current composition string (e.g. "kyou")
+        int ime_cursor = 0;               // Caret position in composition
+        std::string ime_result;           // Confirmed result string (e.g. "今日")
+        
+        // Frame update (copy current to previous)
+        void advance_frame() {
+            mouse_was_down = mouse_down;
+            mouse_wheel = 0; // Reset per-frame delta
+            chars.clear();
+            keys.clear();
+            ime_result.clear(); // Clear one-shot result
+        }
+    };
+
+    // --- Interaction State (Ephemeral - RuntimeState) ---
+    // Per Iron Philosophy XII: "RuntimeState は揮発性メモ"
+    // Hover, Active, Focus - can be regenerated each frame.
+    // NOT mixed with PersistentState.
+    
+    struct InteractionState {
+        ID hot_id{};     // Currently hovered (this frame)
+        ID active_id{};  // Currently pressed/captured
+        ID focus_id{};   // Keyboard focus candidate
+        
+        void reset_frame() {
+            hot_id = ID{};
+            // active_id persists within frame (for drag)
+            // focus_id persists within frame
+        }
+    };
+
+    // --- Persistent State (Survives frames) ---
+    struct PersistentState {
+        // ID -> Last frame's computed rect (for 1-frame-delayed hit test)
+        std::map<uint64_t, Rectangle> last_frame_rects;
+        
+        // ID -> Scroll offset (for scroll containers)
+        std::map<uint64_t, Vec2> scroll_offsets;
+        
+        // ID -> Animation State
+        std::map<uint64_t, AnimationState> animations;
+
+        ID focused_id{};
+        
+        void store_rect(ID id, float x, float y, float w, float h) {
+            last_frame_rects[id.value] = {x, y, w, h};
+        }
+        
+        Rectangle get_rect(ID id) const {
+            auto it = last_frame_rects.find(id.value);
+            if (it != last_frame_rects.end()) return it->second;
+            return {0, 0, 0, 0};
+        }
+    };
 
 } // namespace internal
 } // namespace fanta
+

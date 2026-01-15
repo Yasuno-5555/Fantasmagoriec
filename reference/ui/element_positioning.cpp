@@ -1,5 +1,5 @@
 #include <fanta.h>
-#include "../core/types_internal.hpp"
+#include "../core/contexts_internal.hpp"
 #include "../core/contexts_internal.hpp"
 #include <cmath> // for NAN
 

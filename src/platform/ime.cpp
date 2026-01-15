@@ -53,7 +53,7 @@ void IMELogic::Render(const IMEState& state, DrawList& dl) {
         }
         
         // TODO: Render candidate text
-        // Format: "1. 候補"
+        // Format: "1. 候裁E
         (void)text;
     }
 }

@@ -38,8 +38,11 @@ namespace internal {
 
         FT_Face get_face(FontID font);
 
-        // Phase 25: Advanced Text
-        FontID find_font_for_char(uint32_t codepoint);
+        // L-1: Glyphs by Codepoint with Fallback
+        // Returns {font_id, glyph_index}
+        // If not found in primary font, checks fallback stack.
+        std::pair<FontID, uint32_t> get_glyph_index(uint32_t codepoint);
+        
         void add_fallback_font(FontID font) { font_fallback_stack.push_back(font); }
 
     private:

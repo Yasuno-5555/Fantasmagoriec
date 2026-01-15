@@ -1,5 +1,5 @@
 #pragma once
-#include "core/types_internal.hpp"
+#include "core/types_core.hpp"
 #include <cstdint>
 #include <vector>
 #include <string>

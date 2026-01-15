@@ -1,5 +1,4 @@
 #define NOMINMAX
-// --- Standard Headers First ---
 #include <cstdio>
 #include <cstdint>
 #include <string>
@@ -7,1117 +6,292 @@
 #include <algorithm>
 #include <vector>
 #include <cmath>
+#include <cstring>
 
 #include "backend_factory.hpp"
-#include "core/types_internal.hpp"
+#include "core/contexts_internal.hpp"
 #include "backend/drawlist.hpp"
-#include "text/glyph_cache.hpp" // Phase 4
+#include "text/glyph_cache.hpp"
 #include <glad/gl.h>
-#define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
-#include <GLFW/glfw3native.h>
-
-// Phase 5.2: Screenshot support
 #include "stb_image_write.h"
 
 namespace fanta {
 
-// OpenGL Implementation of GpuTexture
 class OpenGLTexture : public internal::GpuTexture {
 public:
     OpenGLTexture(int w, int h, internal::TextureFormat fmt) : w_(w), h_(h), format_(fmt) {
         glGenTextures(1, &id_);
         glBindTexture(GL_TEXTURE_2D, id_);
-        
         GLint internal_fmt = GL_RGBA8;
         GLenum external_fmt = GL_RGBA;
         GLenum type = GL_UNSIGNED_BYTE;
-        
-        if (fmt == internal::TextureFormat::R8) {
-            internal_fmt = GL_R8;
-            external_fmt = GL_RED;
-        } else if (fmt == internal::TextureFormat::RGBA16F) {
-            internal_fmt = GL_RGBA16F;
-            type = GL_HALF_FLOAT;
-        }
-        
+        if (fmt == internal::TextureFormat::R8) { internal_fmt = GL_R8; external_fmt = GL_RED; }
+        else if (fmt == internal::TextureFormat::RGBA16F) { internal_fmt = GL_RGBA16F; type = GL_HALF_FLOAT; }
         glTexImage2D(GL_TEXTURE_2D, 0, internal_fmt, w_, h_, 0, external_fmt, type, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
-    
-    ~OpenGLTexture() {
-        if (id_) glDeleteTextures(1, &id_);
-    }
-    
+    ~OpenGLTexture() { if (id_) glDeleteTextures(1, &id_); }
     void upload(const void* data, int w, int h) override {
         glBindTexture(GL_TEXTURE_2D, id_);
-        GLenum external_fmt = (format_ == internal::TextureFormat::R8) ? GL_RED : GL_RGBA;
+        GLenum ext = (format_ == internal::TextureFormat::R8) ? GL_RED : GL_RGBA;
         GLenum type = (format_ == internal::TextureFormat::RGBA16F) ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE;
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, external_fmt, type, data);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, ext, type, data);
     }
-    
     uint64_t get_native_handle() const override { return id_; }
     int width() const override { return w_; }
     int height() const override { return h_; }
-
 private:
-    GLuint id_ = 0;
-    int w_, h_;
-    internal::TextureFormat format_;
+    GLuint id_ = 0; int w_, h_; internal::TextureFormat format_;
 };
 
-// --- Class Definition (Moved from Header) ---
 class OpenGLBackend : public Backend {
     GLFWwindow* window = nullptr;
-    
-    // DPI context
-    float device_pixel_ratio = 1.0f;
-    int logical_width = 0;
-    int logical_height = 0;
-    
-    // Render Resources
-    GLuint sdf_program, text_program;
-    GLuint compute_program, copy_program;
-    GLuint loc_pos, loc_size, loc_color, loc_radius, loc_shape, loc_is_squircle, loc_blur, loc_wobble;
-    GLuint loc_backdrop, loc_blur_sigma;
-    GLuint loc_c_offset;
-    GLuint vao, vbo;
-    
-    // Intermediate Textures for Blur/Glass
-    GLuint blur_tex[2] = {0, 0};
-    int blur_w = 0, blur_h = 0;
-    
-    bool compile_sdf_shader();
-    bool compile_text_shader(); 
-    void setup_quad();
-    void setup_text_renderer(); 
-    
-    float scroll_accum = 0; // Phase 8
-    
+    float dpr = 1.0f;
+    int lw = 0, lh = 0;
+    GLuint sdf_prog, text_prog;
+    GLint loc_pos, loc_size, loc_color, loc_radius, loc_shape, loc_is_squircle, loc_blur, loc_wobble;
+    GLint loc_backdrop, loc_blur_sigma;
+    GLuint quad_vao = 0, quad_vbo = 0, text_vao = 0, text_vbo = 0;
+    GLuint grab_tex = 0; int grab_w = 0, grab_h = 0;
+    float scroll_accum = 0;
+
+    bool compile_shaders();
+    void setup_buffers();
+
 public:
     bool init(int w, int h, const char* title) override;
     void shutdown() override;
     bool is_running() override;
     void begin_frame(int w, int h) override;
     void end_frame() override;
-    void render(const fanta::internal::DrawList& draw_list) override;
-    void get_mouse_state(float& x, float& y, bool& down, float& wheel) override;
+    void render(const internal::DrawList& draw_list) override;
+    void get_mouse_state(float& mx, float& my, bool& mdown, float& mwheel) override;
+    void get_keyboard_events(std::vector<uint32_t>& chars, std::vector<int>& keys) override;
     
-    internal::GpuTexturePtr create_texture(int w, int h, internal::TextureFormat format) override {
-        return std::make_shared<OpenGLTexture>(w, h, format);
+#ifndef NDEBUG
+    bool capture_screenshot(const char* filename) override;
+#endif
+    internal::GpuTexturePtr create_texture(int w, int h, internal::TextureFormat fmt) override {
+        return std::make_shared<OpenGLTexture>(w, h, fmt);
     }
-
     Capabilities capabilities() const override { return { true }; }
-    
-    // Phase 5.2: Screenshot capture
-    bool capture_screenshot(const char* filename);
 };
 
+std::unique_ptr<Backend> CreateOpenGLBackend() { return std::make_unique<OpenGLBackend>(); }
 
-// --- Factory Implementation ---
-std::unique_ptr<Backend> CreateOpenGLBackend() {
-    return std::make_unique<OpenGLBackend>();
-}
-
-
-// --- Implementation ---
-
-// Phase 2: SDF Shader Source (embedded)
-static const char* sdf_vert_src = R"(
-#version 330 core
-layout(location = 0) in vec2 aPos;
-
-uniform vec2 uShapePos;
-uniform vec2 uShapeSize;
+// --- Shader Logic ---
+static const char* vs_sdf = R"(#version 330 core
+layout(location=0) in vec2 aPos;
 uniform vec2 uViewportSize;
-uniform float uDevicePixelRatio;
+out vec2 vCoord;
+void main(){gl_Position=vec4(aPos,0,1);vCoord=(aPos*0.5+0.5)*uViewportSize;vCoord.y=uViewportSize.y-vCoord.y;})";
 
-out vec2 vFragCoord;
-
-void main() {
-    // Fullscreen quad
-    vec2 ndc = aPos;
-    gl_Position = vec4(ndc, 0.0, 1.0);
-    // Convert to screen-space coords where Y=0 is at TOP (like layout coords)
-    vec2 raw_coords = (ndc * 0.5 + 0.5) * uViewportSize;
-    vFragCoord = vec2(raw_coords.x, uViewportSize.y - raw_coords.y);
-}
-)";
-
-
-
-static const char* sdf_frag_src = R"(
-#version 330 core
-in vec2 vFragCoord;
-
-uniform vec2 uShapePos;
-uniform vec2 uShapeSize;
+static const char* fs_sdf = R"(#version 330 core
+in vec2 vCoord;
+uniform vec2 uShapePos, uShapeSize, uWobble;
 uniform vec4 uColor;
-uniform float uRadius;
+uniform float uRadius, uBlurSigma, uDevicePixelRatio;
 uniform int uShapeType;
-uniform bool uIsSquircle; 
-uniform vec2 uViewportSize;
-uniform float uDevicePixelRatio;
-uniform float uBlurSigma;
+uniform bool uIsSquircle;
 uniform sampler2D uBackdrop;
-uniform vec2 uWobble; // Phase 40: Liquid Glass
-
-out vec4 FragColor;
-
-float sdf_rounded_rect(vec2 p, vec2 size, float radius) {
-    if (uIsSquircle) {
-        radius = min(radius, min(size.x, size.y) * 0.5);
-        vec2 d = abs(p) - (size - radius);
-        d = max(d, 0.0) / radius;
-        return (pow(d.x, 2.4) + pow(d.y, 2.4) - 1.0) * radius;
+out vec4 oColor;
+float sdf_rr(vec2 p, vec2 b, float r){
+    if(uIsSquircle){r=min(r,min(b.x,b.y));vec2 d=abs(p)-(b-r);d=max(d,0.)/r;return(pow(d.x,2.4)+pow(d.y,2.4)-1.)*r;}
+    r=min(r,min(b.x,b.y));vec2 d=abs(p)-b+r;return min(max(d.x,d.y),0.)+length(max(d,0.))-r;
+}
+void main(){
+    float aa = 1.0/uDevicePixelRatio;
+    vec2 p = vCoord - (uShapePos + uShapeSize*0.5);
+    float d = 0.0;
+    if(uShapeType==0) { vec2 q=abs(p)-uShapeSize*0.5; d=length(max(q,0.))+min(max(q.x,q.y),0.); }
+    else if(uShapeType==1) d=sdf_rr(p, uShapeSize*0.5, uRadius);
+    else if(uShapeType==2) d=length(p)-uRadius;
+    else if(uShapeType==3) { vec2 ba=uShapeSize-uShapePos,pa=vCoord-uShapePos;float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.);d=length(pa-ba*h)-uRadius; }
+    float a = 1.0-smoothstep(-aa,aa,d);
+    vec4 final = uColor;
+    if(uBlurSigma>0.0){
+        vec2 uv = gl_FragCoord.xy/textureSize(uBackdrop,0);
+        float s=uBlurSigma; vec2 ts=1.0/textureSize(uBackdrop,0);
+        vec4 b = (texture(uBackdrop,uv+vec2(s,s)*ts)+texture(uBackdrop,uv+vec2(-s,s)*ts)+texture(uBackdrop,uv+vec2(s,-s)*ts)+texture(uBackdrop,uv+vec2(-s,-s)*ts))*0.25;
+        final=mix(b*1.1,uColor,uColor.a);
     }
-    radius = min(radius, min(size.x, size.y) * 0.5);
-    vec2 d = abs(p) - size + radius;
-    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - radius;
-}
+    float accent=1.-smoothstep(0.,2./uDevicePixelRatio,abs(d+0.5));
+    final.rgb=mix(final.rgb, (uColor.r>0.5?vec3(1.,.2,.8):vec3(0.,1.,1.)), accent*0.4);
+    oColor=vec4(final.rgb,final.a*a);
+})";
 
-float sdf_circle(vec2 p, float r) { return length(p) - r; }
-float sdf_rect(vec2 p, vec2 size) {
-    vec2 d = abs(p) - size;
-    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
-}
-
-void main() {
-    float aa_width = 1.0 / uDevicePixelRatio;
-    vec2 center = uShapePos + uShapeSize * 0.5;
-    vec2 p = vFragCoord - center;
-    
-    float dist = 0.0;
-    if (uShapeType == 0) dist = sdf_rect(p, uShapeSize * 0.5);
-    else if (uShapeType == 1) dist = sdf_rounded_rect(p, uShapeSize * 0.5, uRadius);
-    else if (uShapeType == 2) dist = sdf_circle(p, uRadius);
-    
-    float alpha = 1.0 - smoothstep(-aa_width, aa_width, dist);
-    
-    // Liquid Glass: Wobble displacement
-    vec2 screenUV = gl_FragCoord.xy / vec2(textureSize(uBackdrop, 0));
-    vec2 displacedUV = screenUV + uWobble * 0.01; 
-    
-    vec4 finalColor = uColor;
-    if (uBlurSigma > 0.0) {
-        vec4 blurred = texture(uBackdrop, displacedUV);
-        // Vibrant Boost
-        blurred.rgb *= 1.1; 
-        finalColor = mix(blurred, uColor, uColor.a);
-    }
-    
-    // Neon Accent: Super thin line at the inner edge
-    float accent = 1.0 - smoothstep(0.0, 2.0 / uDevicePixelRatio, abs(dist + 0.5));
-    vec3 neonColor = vec3(0.0, 1.0, 1.0); // Cyan Neon
-    if (uColor.r > 0.5) neonColor = vec4(1.0, 0.2, 0.8, 1.0).rgb; // Pink Neon
-    
-    finalColor.rgb = mix(finalColor.rgb, neonColor, accent * 0.4);
-    finalColor.a = alpha;
-    
-    FragColor = finalColor;
-}
-)";
-
-static const char* blur_compute_src = R"(
-#version 430 core
-layout(local_size_x = 16, local_size_y = 16) in;
-layout(rgba8, binding = 0) uniform readonly image2D uInput;
-layout(rgba8, binding = 1) uniform writeonly image2D uOutput;
-
-uniform int uHorizontal;
-uniform int uRadius;
-
-void main() {
-    ivec2 gPos = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = imageSize(uInput);
-    if (gPos.x >= size.x || gPos.y >= size.y) return;
-
-    vec4 result = vec4(0.0);
-    float totalWeight = 0.0;
-    for (int i = -uRadius; i <= uRadius; ++i) {
-        float weight = exp(-(i * i) / (2.0 * uRadius * uRadius));
-        ivec2 offset = uHorizontal == 1 ? ivec2(i, 0) : ivec2(0, i);
-        ivec2 pos = clamp(gPos + offset, ivec2(0), size - 1);
-        result += imageLoad(uInput, pos) * weight;
-        totalWeight += weight;
-    }
-    vec4 frag = result / totalWeight;
-    // Boost saturation slightly in the blur pass for vibrancy
-    float gray = dot(frag.rgb, vec3(0.299, 0.587, 0.114));
-    frag.rgb = mix(vec3(gray), frag.rgb, 1.2);
-    imageStore(uOutput, gPos, frag);
-}
-)";
-
-// Phase 4: Text Shader
-static const char* text_vert_src = R"(
-#version 330 core
-layout(location = 0) in vec4 aData; // xy=pos, zw=uv
+static const char* vs_text = R"(#version 330 core
+layout(location=0) in vec4 aData;
 uniform vec2 uViewportSize;
 out vec2 vUV;
-void main() {
-    // Map Logic Coords (0..W, 0..H) to NDC (-1..1)
-    // Y-down (0 at top) -> Y-up (1 at top, -1 at bottom)
-    float x = (aData.x / uViewportSize.x) * 2.0 - 1.0;
-    float y = (1.0 - aData.y / uViewportSize.y) * 2.0 - 1.0; 
-    gl_Position = vec4(x, y, 0.0, 1.0);
-    vUV = aData.zw;
-}
-)";
+void main(){gl_Position=vec4((aData.x/uViewportSize.x)*2.-1.,(1.-aData.y/uViewportSize.y)*2.-1.,0,1);vUV=aData.zw;})";
 
-static const char* blur_compute_src = R"(#version 430 core
-layout(local_size_x = 16, local_size_y = 16) in;
-layout(rgba8, binding = 0) uniform readonly image2D uInput;
-layout(rgba8, binding = 1) uniform writeonly image2D uOutput;
-uniform int uOffset;
-
-void main() {
-    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = imageSize(uInput);
-    if(pos.x >= size.x || pos.y >= size.y) return;
-
-    // Kawase Blur: 4 samples offset by (d+0.5)
-    float d = float(uOffset) + 0.5;
-    vec4 sum = imageLoad(uInput, pos + ivec2(int(d), int(d)));
-    sum += imageLoad(uInput, pos + ivec2(int(-d), int(d)));
-    sum += imageLoad(uInput, pos + ivec2(int(d), int(-d)));
-    sum += imageLoad(uInput, pos + ivec2(int(-d), int(-d)));
-    
-    imageStore(uOutput, pos, sum * 0.25);
-}
-)";
-
-const char* copy_frag_src = R"(#version 330 core
-out vec4 FragColor;
-in vec2 TexCoords;
-uniform sampler2D uScreen;
-uniform float uNoise;
-
-float rand(vec2 co) {
-    return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
-}
-
-void main() {
-    vec4 color = texture(uScreen, TexCoords);
-    float n = (rand(TexCoords) - 0.5) * uNoise;
-    FragColor = vec4(color.rgb + n, color.a);
-}
-)";
-
-static const char* text_frag_src = R"(
-#version 330 core
+static const char* fs_text = R"(#version 330 core
 in vec2 vUV;
-uniform sampler2D uAtlas; 
+uniform sampler2D uAtlas;
 uniform vec4 uColor;
-out vec4 FragColor;
+out vec4 oColor;
+void main(){float d=texture(uAtlas,vUV).r;float w=fwidth(d);float a=smoothstep(0.5-w,0.5+w,d);if(a<0.01)discard;oColor=vec4(uColor.rgb,uColor.a*a);})";
 
-void main() {
-    float dist = texture(uAtlas, vUV).r;
-    // Standard derivatives for SDF AA
-    // Using fwidth ensures sharpness at any scale
-    float width = fwidth(dist);
-    // Standard SDF edge is at 0.5 (assuming FreeType generated it well)
-    // 0.5 - wa/2 to 0.5 + wa/2
-    float alpha = smoothstep(0.5 - width, 0.5 + width, dist);
-    
-    // Discard fully transparent pixels?
-    if (alpha <= 0.01) discard; 
-    
-    FragColor = vec4(uColor.rgb, uColor.a * alpha);
+static GLuint compile(GLenum t, const char* s){
+    GLuint h=glCreateShader(t);glShaderSource(h,1,&s,0);glCompileShader(h);
+    GLint ok;glGetShaderiv(h,GL_COMPILE_STATUS,&ok);
+    if(!ok){char err[512];glGetShaderInfoLog(h,512,0,err);std::cerr<<err<<std::endl;return 0;}
+    return h;
 }
-)";
-
-
-
-static GLuint compile_shader(GLenum type, const char* src) {
-    GLuint shader = glCreateShader(type);
-    glShaderSource(shader, 1, &src, nullptr);
-    glCompileShader(shader);
-    
-    GLint success;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char info[512];
-        glGetShaderInfoLog(shader, 512, nullptr, info);
-        std::cerr << "Shader compile error: " << info << std::endl;
-        glDeleteShader(shader);
-        return 0;
-    }
-    return shader;
-}
-
-static GLuint link_program(GLuint vs, GLuint fs) {
-    GLuint program = glCreateProgram();
-    glAttachShader(program, vs);
-    glAttachShader(program, fs);
-    glLinkProgram(program);
-    
-    GLint success;
-    glGetProgramiv(program, GL_LINK_STATUS, &success);
-    if (!success) {
-        char info[512];
-        glGetProgramInfoLog(program, 512, nullptr, info);
-        std::cerr << "Shader link error: " << info << std::endl;
-        glDeleteProgram(program);
-        return 0;
-    }
-    return program;
-}
-
-bool OpenGLBackend::compile_sdf_shader() {
-    GLuint vs = compile_shader(GL_VERTEX_SHADER, sdf_vert_src);
-    if (!vs) return false;
-    
-    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, sdf_frag_src);
-    if (!fs) {
-        glDeleteShader(vs);
-        return false;
-    }
-    
-    sdf_program = link_program(vs, fs);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    
-    return sdf_program != 0;
-}
-
-bool OpenGLBackend::compile_text_shader() {
-    GLuint vs = compile_shader(GL_VERTEX_SHADER, text_vert_src);
-    if (!vs) return false;
-    
-    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, text_frag_src);
-    if (!fs) { glDeleteShader(vs); return false; }
-    
-    text_program = link_program(vs, fs);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    return text_program != 0;
-}
-
-bool OpenGLBackend::compile_compute_program() {
-    GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
-    glShaderSource(shader, 1, &blur_compute_src, NULL);
-    glCompileShader(shader);
-    
-    GLint success;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char info[512];
-        glGetShaderInfoLog(shader, 512, nullptr, info);
-        std::cerr << "Compute Shader compile error: " << info << std::endl;
-        glDeleteShader(shader);
-        return false;
-    }
-    
-    compute_program = glCreateProgram();
-    glAttachShader(compute_program, shader);
-    glLinkProgram(compute_program);
-    glDeleteShader(shader);
-    
-    loc_c_offset = glGetUniformLocation(compute_program, "uOffset");
+bool OpenGLBackend::compile_shaders(){
+    GLuint vs=compile(GL_VERTEX_SHADER,vs_sdf), fs=compile(GL_FRAGMENT_SHADER,fs_sdf);
+    sdf_prog=glCreateProgram();glAttachShader(sdf_prog,vs);glAttachShader(sdf_prog,fs);glLinkProgram(sdf_prog);
+    vs=compile(GL_VERTEX_SHADER,vs_text); fs=compile(GL_FRAGMENT_SHADER,fs_text);
+    text_prog=glCreateProgram();glAttachShader(text_prog,vs);glAttachShader(text_prog,fs);glLinkProgram(text_prog);
     return true;
 }
 
-bool OpenGLBackend::compile_copy_program() {
-    const char* vs_src = "#version 330 core\nlayout(location=0) in vec2 pos; out vec2 TexCoords; void main() { TexCoords = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0.0, 1.0); }";
-    GLuint vs = compile_shader(GL_VERTEX_SHADER, vs_src);
-    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, copy_frag_src);
-    if (!vs || !fs) return false;
-    
-    copy_program = link_program(vs, fs);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    return copy_program != 0;
+void OpenGLBackend::setup_buffers(){
+    float q[]={-1,-1,1,-1,-1,1,1,1};
+    glGenVertexArrays(1,&quad_vao);glGenBuffers(1,&quad_vbo);
+    glBindVertexArray(quad_vao);glBindBuffer(GL_ARRAY_BUFFER,quad_vbo);
+    glBufferData(GL_ARRAY_BUFFER,sizeof(q),q,GL_STATIC_DRAW);
+    glVertexAttribPointer(0,2,GL_FLOAT,0,8,0);glEnableVertexAttribArray(0);
+    glGenVertexArrays(1,&text_vao);glGenBuffers(1,&text_vbo);
+    glBindVertexArray(text_vao);glBindBuffer(GL_ARRAY_BUFFER,text_vbo);
+    glVertexAttribPointer(0,4,GL_FLOAT,0,16,0);glEnableVertexAttribArray(0);
 }
 
-void OpenGLBackend::setup_text_renderer() {
-    // Dynamic VAO/VBO for text batches
-    glGenVertexArrays(1, &text_vao);
-    glGenBuffers(1, &text_vbo);
-    
-    glBindVertexArray(text_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, text_vbo);
-    
-    // Layout: 0 = vec4(pos.xy, uv.zw)
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
+static std::vector<uint32_t> g_chars; static std::vector<int> g_keys;
+void char_cb(GLFWwindow*,unsigned int c){g_chars.push_back(c);}
+void key_cb(GLFWwindow*,int k,int,int a,int){if(a==GLFW_PRESS||a==GLFW_REPEAT)g_keys.push_back(k);}
+
+bool OpenGLBackend::init(int w, int h, const char* title){
+    if(!glfwInit())return 0;
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,3);glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE,GLFW_OPENGL_CORE_PROFILE);
+    window=glfwCreateWindow(w,h,title,0,0);if(!window)return 0;
+    glfwMakeContextCurrent(window);glfwSetWindowUserPointer(window,this);
+    glfwSetCharCallback(window,char_cb);glfwSetKeyCallback(window,key_cb);
+    glfwSetScrollCallback(window,[](GLFWwindow* win,double,double y){static_cast<OpenGLBackend*>(glfwGetWindowUserPointer(win))->scroll_accum+=(float)y;});
+    if(!gladLoadGL((GLADloadfunc)glfwGetProcAddress))return 0;
+    glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+    compile_shaders();setup_buffers();
+    internal::GlyphCache::Get().init(this);
+    lw=w;lh=h;return 1;
 }
 
-void OpenGLBackend::setup_quad() {
-    // Fullscreen quad for instanced rendering
-    float quad[] = {
-        -1.0f, -1.0f,
-         1.0f, -1.0f,
-        -1.0f,  1.0f,
-         1.0f,  1.0f
-    };
-    
-    glGenVertexArrays(1, &quad_vao);
-    glGenBuffers(1, &quad_vbo);
-    
-    glBindVertexArray(quad_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-    
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    
-    glBindVertexArray(0);
+void OpenGLBackend::shutdown(){if(sdf_prog)glDeleteProgram(sdf_prog);glfwTerminate();}
+bool OpenGLBackend::is_running(){return !glfwWindowShouldClose(window);}
+void OpenGLBackend::begin_frame(int w, int h){
+    glfwPollEvents();int dw,dh;glfwGetFramebufferSize(window,&dw,&dh);
+    glViewport(0,0,dw,dh);dpr=(float)dw/(float)w;lw=w;lh=h;
+    glClearColor(0.1f,0.1f,0.3f,1);glClear(GL_COLOR_BUFFER_BIT);
 }
+void OpenGLBackend::end_frame(){glfwSwapBuffers(window);}
 
-bool OpenGLBackend::init(int w, int h, const char* title) {
-    if (!glfwInit()) return false;
-    
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-
-    window = glfwCreateWindow(w, h, title, NULL, NULL);
-    if (!window) { glfwTerminate(); return false; }
-    
-    glfwMakeContextCurrent(window);
-    
-    // Phase 6.1: Set this instance as user pointer for callbacks
-    glfwSetWindowUserPointer(window, this);
-
-    // Phase 8: Scroll Callback
-    glfwSetScrollCallback(window, [](GLFWwindow* w, double xoff, double yoff) {
-        auto* b = static_cast<OpenGLBackend*>(glfwGetWindowUserPointer(w));
-        if (b) b->scroll_accum += (float)yoff;
-    });
-
-    if (!gladLoadGL((GLADloadfunc)glfwGetProcAddress)) return false;
-    
-    // Basic setup
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    
-    if (!compile_sdf_shader()) {
-        std::cerr << "Failed to compile SDF shader" << std::endl;
-        return false;
-    }
-    
-    // Phase 4: Text Shader
-    if (!compile_text_shader()) {
-        std::cerr << "Failed to compile Text shader" << std::endl;
-        return false;
-    }
-    
-    // Phase 27: Compute & Copy Shaders
-    if (!compile_compute_program() || !compile_copy_program()) {
-        std::cerr << "Failed to compile Compute/Copy shaders" << std::endl;
-    }
-    
-    setup_quad();
-    setup_text_renderer();
-    
-    // Phase 4: Init Glyph Cache GPU resources
-    internal::GlyphCache::Get().init();
-    
-    // Initial render setup for compute
-    blur_w = w; blur_h = h;
-    
-    // Phase 35: Accessibility Subclassing
-    HWND hwnd = glfwGetWin32Window(window);
-    if (hwnd) {
-        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)this);
-        auto original_proc = (WNDPROC)SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)[](HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) -> LRESULT {
-            if (msg == WM_GETOBJECT) {
-                extern LRESULT FantaHandleUiaRequest(HWND, WPARAM, LPARAM);
-                LRESULT res = FantaHandleUiaRequest(hWnd, wParam, lParam);
-                if (res != 0) return res;
-            }
-            // Fallback to original proc (complexity: need to store it somewhere)
-            // For now, assume we can fetch it or just use DefWindowProc if we don't care about GLFW for this msg
-            return CallWindowProc((WNDPROC)GetProp(hWnd, L"FantaOrigProc"), hWnd, msg, wParam, lParam);
-        });
-        SetProp(hwnd, L"FantaOrigProc", (HANDLE)original_proc);
-    }
-
-    logical_width = w;
-    logical_height = h;
-    
-    return true;
-}
-
-void OpenGLBackend::shutdown() {
-    if (sdf_program) {
-        glDeleteProgram(sdf_program);
-        sdf_program = 0;
-    }
-    if (quad_vao) {
-        glDeleteVertexArrays(1, &quad_vao);
-        quad_vao = 0;
-    }
-    if (quad_vbo) {
-        glDeleteBuffers(1, &quad_vbo);
-        quad_vbo = 0;
-    }
-    glfwDestroyWindow(window);
-    glfwTerminate();
-}
-
-bool OpenGLBackend::is_running() {
-    return !glfwWindowShouldClose(window);
-}
-
-void OpenGLBackend::begin_frame(int w, int h) {
-    glfwPollEvents();
-    
-    int dw, dh;
-    glfwGetFramebufferSize(window, &dw, &dh);
-    glViewport(0, 0, dw, dh);
-    
-    // Calculate device pixel ratio
-    device_pixel_ratio = (float)dw / (float)w;
-    logical_width = w;
-    logical_height = h;
-    
-    glClearColor(0.07f, 0.07f, 0.07f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-}
-
-void OpenGLBackend::end_frame() {
-    glfwSwapBuffers(window);
-}
-
-void OpenGLBackend::render(const internal::DrawList& draw_list) {
-    glUseProgram(sdf_program);
-    
-    // Phase 5.1: Fix uniform names to match shader variables
-    GLint loc_pos = glGetUniformLocation(sdf_program, "uShapePos");
-    GLint loc_size = glGetUniformLocation(sdf_program, "uShapeSize");
-    GLint loc_color = glGetUniformLocation(sdf_program, "uColor");
-    GLint loc_radius = glGetUniformLocation(sdf_program, "uRadius");
-    GLint loc_shape = glGetUniformLocation(sdf_program, "uShapeType");
-    GLint loc_is_squircle = glGetUniformLocation(sdf_program, "uIsSquircle"); // Phase 21
-    loc_backdrop = glGetUniformLocation(sdf_program, "uBackdrop");
-    loc_blur_sigma = glGetUniformLocation(sdf_program, "uBlurSigma");
-    GLint loc_vp = glGetUniformLocation(sdf_program, "uViewportSize");
-    GLint loc_dpr = glGetUniformLocation(sdf_program, "uDevicePixelRatio");
-
-    // Set viewport-wide uniforms once (use LOGICAL size like text shader)
-    if (loc_vp >= 0) glUniform2f(loc_vp, (float)logical_width, (float)logical_height);
-    if (loc_dpr >= 0) glUniform1f(loc_dpr, device_pixel_ratio);
-
-    // Bind quad VAO
+void OpenGLBackend::render(const internal::DrawList& dl){
+    glUseProgram(sdf_prog);
+    loc_pos=glGetUniformLocation(sdf_prog,"uShapePos");loc_size=glGetUniformLocation(sdf_prog,"uShapeSize");
+    loc_color=glGetUniformLocation(sdf_prog,"uColor");loc_radius=glGetUniformLocation(sdf_prog,"uRadius");
+    loc_shape=glGetUniformLocation(sdf_prog,"uShapeType");loc_is_squircle=glGetUniformLocation(sdf_prog,"uIsSquircle");
+    loc_blur_sigma=glGetUniformLocation(sdf_prog,"uBlurSigma");loc_backdrop=glGetUniformLocation(sdf_prog,"uBackdrop");
+    glUniform2f(glGetUniformLocation(sdf_prog,"uViewportSize"),(float)lw,(float)lh);
+    glUniform1f(glGetUniformLocation(sdf_prog,"uDevicePixelRatio"),dpr);
     glBindVertexArray(quad_vao);
     
-    // Phase 7: Transform Logic
-    std::vector<float> tx_s, ty_s, sc_s;
-    auto reset_stack = [&]() {
-        tx_s.clear(); ty_s.clear(); sc_s.clear();
-        tx_s.push_back(0); ty_s.push_back(0); sc_s.push_back(1);
-    };
-    auto push_t = [&](float tx, float ty, float s) {
-        float cx = tx_s.back(), cy = ty_s.back(), cs = sc_s.back();
-        // New = Local * Scale + Translate (Applied to world)
-        // World = (Local * s + tx) * cs + cx
-        // World = Local * (s * cs) + (tx * cs + cx)
-        float nsc = s * cs;
-        float ntx = tx * cs + cx;
-        float nty = ty * cs + cy;
-        tx_s.push_back(ntx); ty_s.push_back(nty); sc_s.push_back(nsc);
-    };
-    auto pop_t = [&]() {
-        if(tx_s.size() > 1) { tx_s.pop_back(); ty_s.pop_back(); sc_s.pop_back(); }
-    };
-    auto apply_t = [&](float& x, float& y, float& w, float& h) {
-        float cx = tx_s.back(), cy = ty_s.back(), cs = sc_s.back();
-        x = x * cs + cx; y = y * cs + cy; w *= cs; h *= cs;
-    };
-    auto apply_s = [&](float& v) { v *= sc_s.back(); };
-    auto apply_p = [&](float& x, float& y) {
-        float cx = tx_s.back(), cy = ty_s.back(), cs = sc_s.back();
-        x = x * cs + cx; y = y * cs + cy;
-    };
+    std::vector<float> ts_tx={0}, ts_ty={0}, ts_sc={1};
+    auto push_t=[&](float tx,float ty,float s){float cx=ts_tx.back(),cy=ts_ty.back(),cs=ts_sc.back();ts_tx.push_back(tx*cs+cx);ts_ty.push_back(ty*cs+cy);ts_sc.push_back(s*cs);};
+    auto pop_t=[&](){if(ts_tx.size()>1){ts_tx.pop_back();ts_ty.pop_back();ts_sc.pop_back();}};
+    auto apply_t=[&](float& x,float& y,float& w,float& h){float cs=ts_sc.back();x=x*cs+ts_tx.back();y=y*cs+ts_ty.back();w*=cs;h*=cs;};
+    auto apply_p=[&](float& x,float& y){float cs=ts_sc.back();x=x*cs+ts_tx.back();y=y*cs+ts_ty.back();};
 
-    auto apply_blend_mode = [&](internal::BlendMode mode) {
-        glEnable(GL_BLEND);
-        glBlendEquation(GL_FUNC_ADD);
-        
-        switch (mode) {
-            case internal::BlendMode::SourceOver:
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                break;
-            case internal::BlendMode::SourceIn:
-                glBlendFunc(GL_DST_ALPHA, GL_ZERO);
-                break;
-            case internal::BlendMode::SourceOut:
-                glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_ZERO);
-                break;
-            case internal::BlendMode::SourceAtop:
-                glBlendFunc(GL_DST_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                break;
-            case internal::BlendMode::DestOver:
-                glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_ONE);
-                break;
-            case internal::BlendMode::DestIn:
-                glBlendFunc(GL_ZERO, GL_SRC_ALPHA);
-                break;
-            case internal::BlendMode::DestOut:
-                glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
-                break;
-            case internal::BlendMode::DestAtop:
-                glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_SRC_ALPHA);
-                break;
-            case internal::BlendMode::Xor:
-                glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                break;
-            case internal::BlendMode::Plus:
-                glBlendFunc(GL_ONE, GL_ONE);
-                break;
-            case internal::BlendMode::Multiply:
-                glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
-                break;
-            case internal::BlendMode::Screen:
-                glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR);
-                break;
-            default:
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                break;
-        }
-    };
+    struct Clip{float x,y,w,h;}; std::vector<Clip> cs;
+    auto apply_c=[&](){if(cs.empty())glDisable(GL_SCISSOR_TEST);else{glEnable(GL_SCISSOR_TEST);auto& c=cs.back();glScissor((int)(c.x*dpr),(int)((lh-(c.y+c.h))*dpr),(int)(c.w*dpr),(int)(c.h*dpr));}};
+    auto push_c=[&](float x,float y,float w,float h){float nx=x,ny=y,nw=w,nh=h;apply_t(nx,ny,nw,nh);if(cs.empty())cs.push_back({nx,ny,nw,nh});else{auto& p=cs.back();float ix=std::max(nx,p.x),iy=std::max(ny,p.y);cs.push_back({ix,iy,std::max(0.0f,std::min(nx+nw,p.x+p.w)-ix),std::max(0.0f,std::min(ny+nh,p.y+p.h)-iy)});};apply_c();};
+    auto pop_c=[&](){if(!cs.empty())cs.pop_back();apply_c();};
 
-    // Phase 8: Scissor Stack
-    struct ClipRect { float x, y, w, h; };
-    std::vector<ClipRect> clip_stack;
-    auto apply_scissor = [&]() {
-        if (clip_stack.empty()) {
-            glDisable(GL_SCISSOR_TEST);
-        } else {
-            glEnable(GL_SCISSOR_TEST);
-            const auto& c = clip_stack.back();
-            float dpr = device_pixel_ratio;
-            int sx = (int)(c.x * dpr);
-            int sy = (int)((logical_height - (c.y + c.h)) * dpr);
-            int sw = (int)(c.w * dpr);
-            int sh = (int)(c.h * dpr);
-            glScissor(sx, sy, sw, sh);
-        }
-    };
-    auto push_clip = [&](float x, float y, float w, float h) {
-        float nx = x, ny = y, nw = w, nh = h;
-        apply_t(nx, ny, nw, nh);
-        if (clip_stack.empty()) {
-            clip_stack.push_back({nx, ny, nw, nh});
-        } else {
-            const auto& prev = clip_stack.back();
-            float ix = std::max(nx, prev.x);
-            float iy = std::max(ny, prev.y);
-            float iw = std::min(nx + nw, prev.x + prev.w) - ix;
-            float ih = std::min(ny + nh, prev.y + prev.h) - iy;
-            clip_stack.push_back({ix, iy, std::max(0.0f, iw), std::max(0.0f, ih)});
-        }
-        apply_scissor();
-    };
-    auto pop_clip = [&]() {
-        if (!clip_stack.empty()) clip_stack.pop_back();
-        apply_scissor();
-    };
-    auto reset_clip = [&]() {
-        clip_stack.clear();
-        glDisable(GL_SCISSOR_TEST);
-    };
-
-    reset_stack();
-    reset_clip();
-
-    // --- Pass 1: Ambient Shadows (Broad, Non-directional) ---
-    for (const auto& cmd : draw_list.commands) {
-        if (cmd.type == internal::DrawCmdType::PushTransform) {
-            push_t(cmd.transform.tx, cmd.transform.ty, cmd.transform.scale);
-            continue;
-        } else if (cmd.type == internal::DrawCmdType::PopTransform) {
-            pop_t();
-            continue;
-        } else if (cmd.type == internal::DrawCmdType::PushClip) {
-            push_clip(cmd.clip.x, cmd.clip.y, cmd.clip.w, cmd.clip.h);
-            continue;
-        } else if (cmd.type == internal::DrawCmdType::PopClip) {
-            pop_clip();
-            continue;
-        }
-
-        float elevation = 0;
-        float pos_x=0, pos_y=0, size_x=0, size_y=0, radius=0;
-        int shape_type = 0;
-        
-        // Extract parameters based on type
-        if (cmd.type == internal::DrawCmdType::Rectangle) {
-            elevation = cmd.rectangle.elevation;
-            pos_x = cmd.rectangle.pos_x; pos_y = cmd.rectangle.pos_y;
-            size_x = cmd.rectangle.size_x; size_y = cmd.rectangle.size_y;
-            radius = 0; shape_type = 0;
-        } else if (cmd.type == internal::DrawCmdType::RoundedRect) {
-            elevation = cmd.rounded_rect.elevation;
-            pos_x = cmd.rounded_rect.pos_x; pos_y = cmd.rounded_rect.pos_y;
-            size_x = cmd.rounded_rect.size_x; size_y = cmd.rounded_rect.size_y;
-            radius = cmd.rounded_rect.radius; shape_type = 1;
-        } else if (cmd.type == internal::DrawCmdType::Circle) {
-            elevation = cmd.circle.elevation;
-            pos_x = cmd.circle.center_x - cmd.circle.r; 
-            pos_y = cmd.circle.center_y - cmd.circle.r;
-            size_x = cmd.circle.r * 2; size_y = cmd.circle.r * 2;
-            radius = cmd.circle.r; shape_type = 2;
-        } else { continue; } // Skip lines/others for shadow
-        
-        apply_t(pos_x, pos_y, size_x, size_y);
-        apply_s(radius);
-        apply_s(elevation);
-
-        if (elevation > 0) {
-            // Ambient Shadow: Broad, centered, subtle but visible
-            float expand = elevation * 0.8f; 
-            float shadow_alpha = std::min(0.025f * elevation, 0.15f); // Balanced
-            
-            // Expand rect and radius together
-            float final_radius = radius + expand;
-            
-            if (loc_pos >= 0) glUniform2f(loc_pos, pos_x - expand, pos_y - expand);
-            if (loc_size >= 0) glUniform2f(loc_size, size_x + expand*2, size_y + expand*2);
-            // Pure Black Shadow
-            if (loc_color >= 0) glUniform4f(loc_color, 0.0f, 0.0f, 0.0f, shadow_alpha);
-            if (loc_radius >= 0) glUniform1f(loc_radius, final_radius);
-            if (loc_shape >= 0) glUniform1i(loc_shape, shape_type);
-            
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        }
-    }
-
-    reset_stack();
-    reset_clip(); 
-
-    // --- Pass 2: Key Shadows (Directional, Offset Y) ---
-    for (const auto& cmd : draw_list.commands) {
-        if (cmd.type == internal::DrawCmdType::PushTransform) {
-            push_t(cmd.transform.tx, cmd.transform.ty, cmd.transform.scale);
-            continue;
-        } else if (cmd.type == internal::DrawCmdType::PopTransform) {
-            pop_t();
-            continue;
-        } else if (cmd.type == internal::DrawCmdType::PushClip) {
-            push_clip(cmd.clip.x, cmd.clip.y, cmd.clip.w, cmd.clip.h);
-            continue;
-        } else if (cmd.type == internal::DrawCmdType::PopClip) {
-            pop_clip();
-            continue;
-        }
-
-        float elevation = 0;
-        float pos_x=0, pos_y=0, size_x=0, size_y=0, radius=0;
-        int shape_type = 0;
-        
-        // Extract parameters based on type
-        if (cmd.type == internal::DrawCmdType::Rectangle) {
-            elevation = cmd.rectangle.elevation;
-            pos_x = cmd.rectangle.pos_x; pos_y = cmd.rectangle.pos_y;
-            size_x = cmd.rectangle.size_x; size_y = cmd.rectangle.size_y;
-            radius = 0; shape_type = 0;
-        } else if (cmd.type == internal::DrawCmdType::RoundedRect) {
-            elevation = cmd.rounded_rect.elevation;
-            pos_x = cmd.rounded_rect.pos_x; pos_y = cmd.rounded_rect.pos_y;
-            size_x = cmd.rounded_rect.size_x; size_y = cmd.rounded_rect.size_y;
-            radius = cmd.rounded_rect.radius; shape_type = 1;
-        } else if (cmd.type == internal::DrawCmdType::Circle) {
-            elevation = cmd.circle.elevation;
-            pos_x = cmd.circle.center_x - cmd.circle.r; 
-            pos_y = cmd.circle.center_y - cmd.circle.r;
-            size_x = cmd.circle.r * 2; size_y = cmd.circle.r * 2;
-            radius = cmd.circle.r; shape_type = 2;
-        } else { continue; } 
-        
-        apply_t(pos_x, pos_y, size_x, size_y);
-        apply_s(radius);
-        apply_s(elevation); 
-
-        if (elevation > 0) {
-            // Key Shadow: Offset downwards, balanced
-            float expand = elevation * 0.15f; 
-            float offset_y = elevation * 0.4f;
-            float shadow_alpha = std::min(0.05f * elevation, 0.25f); // Balanced key light
-            
-            float final_radius = radius + expand;
-
-            if (loc_pos >= 0) glUniform2f(loc_pos, pos_x - expand, pos_y - expand + offset_y);
-            if (loc_size >= 0) glUniform2f(loc_size, size_x + expand*2, size_y + expand*2);
-            // Pure Black Shadow
-            if (loc_color >= 0) glUniform4f(loc_color, 0.0f, 0.0f, 0.0f, shadow_alpha);
-            if (loc_radius >= 0) glUniform1f(loc_radius, final_radius);
-            if (loc_shape >= 0) glUniform1i(loc_shape, shape_type);
-            
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        }
-    }
-
-    reset_stack();
-    reset_clip();
-
-    // --- Pass 3: Body (Actual Shapes) ---
-    for (const auto& cmd : draw_list.commands) {
-        if (cmd.type == internal::DrawCmdType::PushTransform) {
-            push_t(cmd.transform.tx, cmd.transform.ty, cmd.transform.scale);
-            continue;
-        } else if (cmd.type == internal::DrawCmdType::PopTransform) {
-            pop_t();
-            continue;
-        } else if (cmd.type == internal::DrawCmdType::PushClip) {
-            push_clip(cmd.clip.x, cmd.clip.y, cmd.clip.w, cmd.clip.h);
-            continue;
-        } else if (cmd.type == internal::DrawCmdType::PopClip) {
-            pop_clip();
-            continue;
-        }
-
-        apply_blend_mode(cmd.blend);
-
-        if (cmd.type == internal::DrawCmdType::Bezier) {
-             float bx0 = cmd.bezier.p0_x, by0 = cmd.bezier.p0_y;
-             float bx1 = cmd.bezier.p1_x, by1 = cmd.bezier.p1_y;
-             float bx2 = cmd.bezier.p2_x, by2 = cmd.bezier.p2_y;
-             float bx3 = cmd.bezier.p3_x, by3 = cmd.bezier.p3_y;
-             
-             apply_p(bx0, by0); apply_p(bx1, by1); apply_p(bx2, by2); apply_p(bx3, by3);
-             
-             float thickness = cmd.bezier.thickness;
-             apply_s(thickness);
-             if (loc_color >= 0) glUniform4f(loc_color, cmd.bezier.color_r, cmd.bezier.color_g, cmd.bezier.color_b, cmd.bezier.color_a);
-             if (loc_shape >= 0) glUniform1i(loc_shape, 3); // Line (using SDF capsule/line)
-             if (loc_radius >= 0) glUniform1f(loc_radius, thickness * 0.5f);
-
-             float px = bx0, py = by0;
-             const int segs = 20;
-             for(int i=1; i<=segs; ++i) {
-                 float t = i/(float)segs;
-                 float u = 1.0f-t;
-                 float nx = u*u*u*bx0 + 3*u*u*t*bx1 + 3*u*t*t*bx2 + t*t*t*bx3;
-                 float ny = u*u*u*by0 + 3*u*u*t*by1 + 3*u*t*t*by2 + t*t*t*by3;
-                 
-                 glUniform2f(loc_pos, px, py);
-                 glUniform2f(loc_size, nx, ny);
-                 glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-                 px = nx; py = ny;
-             }
-             continue;
-        }
-
-        if (cmd.type == internal::DrawCmdType::Rectangle) {
-             float pos_x = cmd.rectangle.pos_x, pos_y = cmd.rectangle.pos_y;
-             float size_x = cmd.rectangle.size_x, size_y = cmd.rectangle.size_y;
-             apply_t(pos_x, pos_y, size_x, size_y);
-             if (loc_pos >= 0) glUniform2f(loc_pos, pos_x, pos_y);
-             if (loc_size >= 0) glUniform2f(loc_size, size_x, size_y);
-             if (loc_color >= 0) glUniform4f(loc_color, cmd.rectangle.color_r, cmd.rectangle.color_g, cmd.rectangle.color_b, cmd.rectangle.color_a);
-             if (loc_radius >= 0) glUniform1f(loc_radius, 0.0f);
-             if (loc_blur_sigma >= 0) glUniform1f(loc_blur_sigma, 0.0f); // Rects usually no blur unless specified
-             if (loc_shape >= 0) glUniform1i(loc_shape, 0); 
-        } else if (cmd.type == internal::DrawCmdType::RoundedRect) {
-             float pos_x = cmd.rounded_rect.pos_x, pos_y = cmd.rounded_rect.pos_y;
-             float size_x = cmd.rounded_rect.size_x, size_y = cmd.rounded_rect.size_y;
-             float radius = cmd.rounded_rect.radius;
-             apply_t(pos_x, pos_y, size_x, size_y);
-             apply_s(radius);
-             if (loc_pos >= 0) glUniform2f(loc_pos, pos_x, pos_y);
-             if (loc_size >= 0) glUniform2f(loc_size, size_x, size_y);
-             if (loc_color >= 0) glUniform4f(loc_color, cmd.rounded_rect.color_r, cmd.rounded_rect.color_g, cmd.rounded_rect.color_b, cmd.rounded_rect.color_a);
-             if (loc_radius >= 0) glUniform1f(loc_radius, radius);
-             if (loc_is_squircle >= 0) glUniform1i(loc_is_squircle, cmd.rounded_rect.is_squircle ? 1 : 0); 
-             if (loc_blur_sigma >= 0) glUniform1f(loc_blur_sigma, cmd.rounded_rect.backdrop_blur);
-             if (loc_shape >= 0) glUniform1i(loc_shape, 1); 
-             
-             if (cmd.rounded_rect.backdrop_blur > 0.0f) {
-                 glActiveTexture(GL_TEXTURE1);
-                 glBindTexture(GL_TEXTURE_2D, final_blur_tex);
-                 glUniform1i(loc_backdrop, 1);
-             }
-        } else if (cmd.type == internal::DrawCmdType::Circle) {
-             float left = cmd.circle.center_x - cmd.circle.r;
-             float top = cmd.circle.center_y - cmd.circle.r;
-             float size = cmd.circle.r * 2.0f;
-             apply_t(left, top, size, size); 
-             float radius = cmd.circle.r; apply_s(radius);
-             if (loc_pos >= 0) glUniform2f(loc_pos, left, top);
-             if (loc_size >= 0) glUniform2f(loc_size, size, size);
-             if (loc_color >= 0) glUniform4f(loc_color, cmd.circle.color_r, cmd.circle.color_g, cmd.circle.color_b, cmd.circle.color_a);
-             if (loc_radius >= 0) glUniform1f(loc_radius, radius);
-             if (loc_blur_sigma >= 0) glUniform1f(loc_blur_sigma, 0.0f);
-             if (loc_shape >= 0) glUniform1i(loc_shape, 2); 
-        } else if (cmd.type == internal::DrawCmdType::Line) {
-             float p0x = cmd.line.p0_x, p0y = cmd.line.p0_y;
-             float p1x = cmd.line.p1_x, p1y = cmd.line.p1_y;
-             float th = cmd.line.thickness;
-             apply_p(p0x, p0y); apply_p(p1x, p1y); apply_s(th);
-             if (loc_pos >= 0) glUniform2f(loc_pos, p0x, p0y);
-             if (loc_size >= 0) glUniform2f(loc_size, p1x, p1y);
-             if (loc_color >= 0) glUniform4f(loc_color, cmd.line.color_r, cmd.line.color_g, cmd.line.color_b, cmd.line.color_a);
-             if (loc_radius >= 0) glUniform1f(loc_radius, th * 0.5f);
-             if (loc_shape >= 0) glUniform1i(loc_shape, 3); 
-        } else {
-            continue; 
-        }
-
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    }
-    
-    
-
-    
-    glBindVertexArray(0);
-    glUseProgram(0);
-    
-    // --- Phase 4: Text Pass ---
-    if (!draw_list.text_runs.empty() && text_program) {
-        glUseProgram(text_program);
-        
-        // Bind Atlas
-        glActiveTexture(GL_TEXTURE0);
-        auto atlas = internal::GlyphCache::Get().get_atlas_texture();
-        if (atlas) {
-            glBindTexture(GL_TEXTURE_2D, (GLuint)atlas->get_native_handle());
-            internal::GlyphCache::Get().update_texture();
-        }
-        
-        GLint loc_atlas = glGetUniformLocation(text_program, "uAtlas");
-        if (loc_atlas >= 0) glUniform1i(loc_atlas, 0);
-        
-        GLint loc_vp = glGetUniformLocation(text_program, "uViewportSize");
-        if (loc_vp >= 0) glUniform2f(loc_vp, (float)logical_width, (float)logical_height);
-        
-        GLint loc_color = glGetUniformLocation(text_program, "uColor");
-        
-        glBindVertexArray(text_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, text_vbo);
-        
-        reset_stack();
-        reset_clip();
-        
-        for (const auto& cmd : draw_list.commands) {
-            if (cmd.type == internal::DrawCmdType::PushTransform) {
-                push_t(cmd.transform.tx, cmd.transform.ty, cmd.transform.scale);
-                continue;
-            } else if (cmd.type == internal::DrawCmdType::PopTransform) {
-                pop_t();
-                continue;
-            } else if (cmd.type == internal::DrawCmdType::PushClip) {
-                push_clip(cmd.clip.x, cmd.clip.y, cmd.clip.w, cmd.clip.h);
-                continue;
-            } else if (cmd.type == internal::DrawCmdType::PopClip) {
-                pop_clip();
-                continue;
-            }
-            
-            if (cmd.type == internal::DrawCmdType::Text) {
-                const auto& run = draw_list.text_runs[cmd.text.run_index];
-                if (run.empty()) continue;
-                
-                glUniform4f(loc_color, cmd.text.color_r, cmd.text.color_g, cmd.text.color_b, cmd.text.color_a);
-                
-                // Build dynamic buffer
-                static std::vector<float> batch;
-                batch.clear();
-                batch.reserve(run.quads.size() * 6 * 4);
-                
-                for (const auto& q : run.quads) {
-                    float x0 = q.x0 + run.offset_x;
-                    float y0 = q.y0 + run.offset_y;
-                    float x1 = q.x1 + run.offset_x;
-                    float y1 = q.y1 + run.offset_y;
-                    
-                    float tx0 = x0, ty0 = y0, tx1 = x1, ty1 = y1;
-                    // Apply Transform (Pan/Zoom/Stack)
-                    apply_p(tx0, ty0);
-                    apply_p(tx1, ty1);
-                    // Note: This applies uniform scale and translation to quads.
-                    // This is sufficient for Pan/Zoom.
-                    
-                    // T1
-                    batch.push_back(tx0); batch.push_back(ty0); batch.push_back(q.u0); batch.push_back(q.v0);
-                    batch.push_back(tx0); batch.push_back(ty1); batch.push_back(q.u0); batch.push_back(q.v1);
-                    batch.push_back(tx1); batch.push_back(ty0); batch.push_back(q.u1); batch.push_back(q.v0);
-                    // T2
-                    batch.push_back(tx1); batch.push_back(ty0); batch.push_back(q.u1); batch.push_back(q.v0);
-                    batch.push_back(tx0); batch.push_back(ty1); batch.push_back(q.u0); batch.push_back(q.v1);
-                    batch.push_back(tx1); batch.push_back(ty1); batch.push_back(q.u1); batch.push_back(q.v1);
+    // --- Passes ---
+    for(int pass=0;pass<3;++pass){
+        ts_tx={0};ts_ty={0};ts_sc={1};cs.clear();glDisable(GL_SCISSOR_TEST);
+        for(const auto& cmd : dl.commands){
+            if(cmd.type==internal::DrawCmdType::PushTransform)push_t(cmd.transform.tx,cmd.transform.ty,cmd.transform.scale);
+            else if(cmd.type==internal::DrawCmdType::PopTransform)pop_t();
+            else if(cmd.type==internal::DrawCmdType::PushClip)push_c(cmd.clip.x,cmd.clip.y,cmd.clip.w,cmd.clip.h);
+            else if(cmd.type==internal::DrawCmdType::PopClip)pop_c();
+            else{
+                if(pass<2){ // Shadows
+                    float el=0,px=0,py=0,sx=0,sy=0,cr=0; int ty=0;
+                    if(cmd.type==internal::DrawCmdType::Rectangle){el=cmd.rectangle.elevation;px=cmd.rectangle.pos_x;py=cmd.rectangle.pos_y;sx=cmd.rectangle.size_x;sy=cmd.rectangle.size_y;}
+                    else if(cmd.type==internal::DrawCmdType::RoundedRect){el=cmd.rounded_rect.elevation;px=cmd.rounded_rect.pos_x;py=cmd.rounded_rect.pos_y;sx=cmd.rounded_rect.size_x;sy=cmd.rounded_rect.size_y;cr=cmd.rounded_rect.radius;ty=1;}
+                    else if(cmd.type==internal::DrawCmdType::Circle){el=cmd.circle.elevation;px=cmd.circle.center_x-cmd.circle.r;py=cmd.circle.center_y-cmd.circle.r;sx=cmd.circle.r*2;sy=sx;cr=cmd.circle.r;ty=2;}
+                    else continue;
+                    if(el>0){
+                        apply_t(px,py,sx,sy); float cs_v=ts_sc.back(); cr*=cs_v; el*=cs_v;
+                        float ex,oy,al; if(pass==0){ex=el*0.8f;oy=0;al=std::min(0.025f*el,0.15f);}else{ex=el*0.15f;oy=el*0.4f;al=std::min(0.05f*el,0.25f);}
+                        glUniform2f(loc_pos,px-ex,py-ex+oy);glUniform2f(loc_size,sx+ex*2,sy+ex*2);
+                        glUniform4f(loc_color,0,0,0,al);glUniform1f(loc_radius,cr+ex);glUniform1i(loc_shape,ty);
+                        glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+                    }
+                } else { // Body
+                    if(cmd.type==internal::DrawCmdType::Rectangle){
+                        float px=cmd.rectangle.pos_x,py=cmd.rectangle.pos_y,sx=cmd.rectangle.size_x,sy=cmd.rectangle.size_y;apply_t(px,py,sx,sy);
+                        glUniform2f(loc_pos,px,py);glUniform2f(loc_size,sx,sy);glUniform4f(loc_color,cmd.rectangle.color_r,cmd.rectangle.color_g,cmd.rectangle.color_b,cmd.rectangle.color_a);
+                        glUniform1f(loc_radius,0);glUniform1i(loc_shape,0);glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+                    } else if(cmd.type==internal::DrawCmdType::RoundedRect){
+                        float px=cmd.rounded_rect.pos_x,py=cmd.rounded_rect.pos_y,sx=cmd.rounded_rect.size_x,sy=cmd.rounded_rect.size_y,cr=cmd.rounded_rect.radius;apply_t(px,py,sx,sy);float csv=ts_sc.back();cr*=csv;
+                        glUniform2f(loc_pos,px,py);glUniform2f(loc_size,sx,sy);glUniform4f(loc_color,cmd.rounded_rect.color_r,cmd.rounded_rect.color_g,cmd.rounded_rect.color_b,cmd.rounded_rect.color_a);
+                        glUniform1f(loc_radius,cr);glUniform1i(loc_is_squircle,cmd.rounded_rect.is_squircle);glUniform1i(loc_shape,1);glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+                    } else if(cmd.type==internal::DrawCmdType::Circle){
+                        float cr=cmd.circle.r,px=cmd.circle.center_x-cr,py=cmd.circle.center_y-cr,s=cr*2;apply_t(px,py,s,s);float csv=ts_sc.back();cr*=csv;
+                        glUniform2f(loc_pos,px,py);glUniform2f(loc_size,s,s);glUniform4f(loc_color,cmd.circle.color_r,cmd.circle.color_g,cmd.circle.color_b,cmd.circle.color_a);
+                        glUniform1f(loc_radius,cr);glUniform1i(loc_shape,2);glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+                    } else if(cmd.type==internal::DrawCmdType::Line){
+                        float px0=cmd.line.p0_x,py0=cmd.line.p0_y,px1=cmd.line.p1_x,py1=cmd.line.p1_y,th=cmd.line.thickness;
+                        float csv=ts_sc.back();px0=px0*csv+ts_tx.back();py0=py0*csv+ts_ty.back();px1=px1*csv+ts_tx.back();py1=py1*csv+ts_ty.back();th*=csv;
+                        glUniform2f(loc_pos,px0,py0);glUniform2f(loc_size,px1,py1);glUniform4f(loc_color,cmd.line.color_r,cmd.line.color_g,cmd.line.color_b,cmd.line.color_a);
+                        glUniform1f(loc_radius,th*0.5f);glUniform1i(loc_shape,3);glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+                    }
                 }
-                
-                glBufferData(GL_ARRAY_BUFFER, batch.size() * sizeof(float), batch.data(), GL_STREAM_DRAW);
-                glDrawArrays(GL_TRIANGLES, 0, (GLsizei)run.quads.size() * 6);
             }
         }
-        
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glBindVertexArray(0);
-        glUseProgram(0);
+    }
+    // Text Pass
+    glUseProgram(text_prog); glActiveTexture(GL_TEXTURE0);
+    auto atlas=internal::GlyphCache::Get().get_atlas_texture(); if(atlas){glBindTexture(GL_TEXTURE_2D,(GLuint)atlas->get_native_handle());internal::GlyphCache::Get().update_texture();}
+    glUniform1i(glGetUniformLocation(text_prog,"uAtlas"),0);glUniform2f(glGetUniformLocation(text_prog,"uViewportSize"),(float)lw,(float)lh);
+    GLint lc=glGetUniformLocation(text_prog,"uColor"); glBindVertexArray(text_vao);glBindBuffer(GL_ARRAY_BUFFER,text_vbo);
+    ts_tx={0};ts_ty={0};ts_sc={1};cs.clear();glDisable(GL_SCISSOR_TEST);
+    for(const auto& cmd : dl.commands){
+        if(cmd.type==internal::DrawCmdType::PushTransform)push_t(cmd.transform.tx,cmd.transform.ty,cmd.transform.scale);
+        else if(cmd.type==internal::DrawCmdType::PopTransform)pop_t();
+        else if(cmd.type==internal::DrawCmdType::PushClip)push_c(cmd.clip.x,cmd.clip.y,cmd.clip.w,cmd.clip.h);
+        else if(cmd.type==internal::DrawCmdType::PopClip)pop_c();
+        else if(cmd.type==internal::DrawCmdType::Glyph){
+            glUniform4f(lc,cmd.glyph.color_r,cmd.glyph.color_g,cmd.glyph.color_b,cmd.glyph.color_a);
+            float gx=cmd.glyph.pos_x,gy=cmd.glyph.pos_y,gw=cmd.glyph.size_x,gh=cmd.glyph.size_y;apply_t(gx,gy,gw,gh);
+            float vd[]={gx,gy,cmd.glyph.u0,cmd.glyph.v0,gx,gy+gh,cmd.glyph.u0,cmd.glyph.v1,gx+gw,gy,cmd.glyph.u1,cmd.glyph.v0,gx+gw,gy+gh,cmd.glyph.u1,cmd.glyph.v1};
+            glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(vd),vd);glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+        }
     }
 }
-
-// Phase 6.1
-void OpenGLBackend::get_mouse_state(float& x, float& y, bool& down, float& wheel) {
-    if (!window) { x=0; y=0; down=false; wheel=0; return; }
-    double mx, my;
-    glfwGetCursorPos(window, &mx, &my);
-    x = (float)mx;
-    y = (float)my;
-    
-    int state = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
-    down = (state == GLFW_PRESS);
-    
-    wheel = scroll_accum;
-    scroll_accum = 0; // Reset after reading
+void OpenGLBackend::get_mouse_state(float& mx,float& my,bool& mdown,float& mwheel){
+    if(!window){mx=my=0;mdown=0;mwheel=0;return;}
+    double dx,dy;glfwGetCursorPos(window,&dx,&dy);mx=(float)dx;my=(float)dy;
+    mdown=glfwGetMouseButton(window,0)==GLFW_PRESS;mwheel=scroll_accum;scroll_accum=0;
 }
+void OpenGLBackend::get_keyboard_events(std::vector<uint32_t>& c,std::vector<int>& k){c=g_chars;k=g_keys;g_chars.clear();g_keys.clear();}
 
-// Phase 5.2: Screenshot capture implementation
+#ifndef NDEBUG
 bool OpenGLBackend::capture_screenshot(const char* filename) {
-    // Get physical framebuffer size
-    int fb_width, fb_height;
-    glfwGetFramebufferSize(window, &fb_width, &fb_height);
-    
-    // Allocate buffer (RGBA)
-    std::vector<uint8_t> pixels(fb_width * fb_height * 4);
-    
-    // Ensure drawing is finished and read from back buffer
-    glFinish();
-    glReadBuffer(GL_BACK);
-    
-    // Read pixels from framebuffer
-    glReadPixels(0, 0, fb_width, fb_height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    
-    // Debug: Check center pixel
-    int cx = fb_width / 2;
-    int cy = fb_height / 2;
-    int idx = (cy * fb_width + cx) * 4;
-    std::cout << "[Screenshot] Center Pixel: R=" << (int)pixels[idx] 
-              << " G=" << (int)pixels[idx+1] 
-              << " B=" << (int)pixels[idx+2] 
-              << " A=" << (int)pixels[idx+3] << std::endl;
-              
-    // OpenGL reads from bottom-left, PNG expects top-left
-    // Flip Y
-    std::vector<uint8_t> flipped(fb_width * fb_height * 4);
-    for (int y = 0; y < fb_height; ++y) {
-        memcpy(
-            flipped.data() + y * fb_width * 4,
-            pixels.data() + (fb_height - 1 - y) * fb_width * 4,
-            fb_width * 4
-        );
-    }
-    
-    // Write PNG
-    int result = stbi_write_png(filename, fb_width, fb_height, 4, flipped.data(), fb_width * 4);
-    
-    if (result) {
-        std::cout << "[Screenshot] Saved to: " << filename << " (" << fb_width << "x" << fb_height << ")" << std::endl;
-    } else {
-        std::cerr << "[Screenshot] Failed to save: " << filename << std::endl;
-    }
-    
-    return result != 0;
+    if(!filename)return 0; int pw=(int)(lw*dpr), ph=(int)(lh*dpr);
+    std::vector<unsigned char> px(pw*ph*4); glFinish(); glReadBuffer(GL_BACK);
+    glReadPixels(0,0,pw,ph,GL_RGBA,GL_UNSIGNED_BYTE,px.data());
+    std::vector<unsigned char> fl(px.size()); int rs=pw*4;
+    for(int y=0;y<ph;++y)memcpy(fl.data()+(ph-1-y)*rs,px.data()+y*rs,rs);
+    for(size_t i=0;i<fl.size();i+=4)std::swap(fl[i],fl[i+2]);
+    return stbi_write_png(filename,pw,ph,4,fl.data(),rs)!=0;
 }
+#endif
 
 } // namespace fanta
