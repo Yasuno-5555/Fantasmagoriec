@@ -30,7 +30,12 @@ void DrawList::add_rect(const Vec2& pos, const Vec2& size, const ColorF& c, floa
     commands.push_back(cmd);
 }
 
-void DrawList::add_rounded_rect(const Vec2& pos, const Vec2& size, float r, const ColorF& c, float elevation, bool squircle, float blur, const Vec2& wobble) {
+void DrawList::add_rounded_rect(const Vec2& pos, const Vec2& size, float r, const ColorF& c, 
+    float elevation, bool squircle, 
+    float border_width, const ColorF& border_color,
+    float glow_strength, const ColorF& glow_color,
+    float blur_strength
+) {
     DrawCmd cmd{};
     cmd.type = DrawCmdType::RoundedRect;
     cmd.rounded_rect.pos_x = pos.x;
@@ -44,9 +49,30 @@ void DrawList::add_rounded_rect(const Vec2& pos, const Vec2& size, float r, cons
     cmd.rounded_rect.color_a = c.a;
     cmd.rounded_rect.elevation = elevation;
     cmd.rounded_rect.is_squircle = squircle;
-    cmd.rounded_rect.backdrop_blur = blur;
-    cmd.rounded_rect.wobble_x = wobble.x;
-    cmd.rounded_rect.wobble_y = wobble.y;
+    cmd.rounded_rect.border_width = border_width;
+    cmd.rounded_rect.border_color_r = border_color.r;
+    cmd.rounded_rect.border_color_g = border_color.g;
+    cmd.rounded_rect.border_color_b = border_color.b;
+    cmd.rounded_rect.border_color_a = border_color.a;
+    cmd.rounded_rect.glow_strength = glow_strength;
+    cmd.rounded_rect.glow_color_r = glow_color.r;
+    cmd.rounded_rect.glow_color_g = glow_color.g;
+    cmd.rounded_rect.glow_color_b = glow_color.b;
+    cmd.rounded_rect.glow_color_a = glow_color.a;
+    cmd.rounded_rect.blur_strength = blur_strength;
+    cmd.blend = current_blend;
+    commands.push_back(cmd);
+}
+
+void DrawList::add_mesh_gradient(const Vec2& pos, const Vec2& size, const GradientData& data) {
+    DrawCmd cmd{};
+    cmd.type = DrawCmdType::MeshGradient;
+    cmd.mesh_gradient.pos_x = pos.x;
+    cmd.mesh_gradient.pos_y = pos.y;
+    cmd.mesh_gradient.size_x = size.x;
+    cmd.mesh_gradient.size_y = size.y;
+    gradients.push_back(data);
+    cmd.mesh_gradient.gradient_index = static_cast<uint32_t>(gradients.size() - 1);
     cmd.blend = current_blend;
     commands.push_back(cmd);
 }

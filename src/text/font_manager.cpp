@@ -80,7 +80,8 @@ namespace internal {
     }
 
     bool FontManager::generate_sdf(FontID font, uint32_t glyph_index, int sdf_size, 
-                                   std::vector<uint8_t>& out_buffer, int& out_w, int& out_h) {
+                                   std::vector<uint8_t>& out_buffer, int& out_w, int& out_h,
+                                   int& out_off_x, int& out_off_y) {
         FT_Face face = get_face(font);
         if (!face) return false;
 
@@ -106,6 +107,8 @@ namespace internal {
         FT_Bitmap& bitmap = face->glyph->bitmap;
         out_w = bitmap.width;
         out_h = bitmap.rows;
+        out_off_x = face->glyph->bitmap_left;
+        out_off_y = face->glyph->bitmap_top;
         
         out_buffer.resize(out_w * out_h);
         

@@ -54,6 +54,19 @@ namespace ui {
         Derived& blur(float b) { self().view_->backdrop_blur = b; return self(); }
         Derived& wobble(float x, float y) { self().view_->wobble_x = x; self().view_->wobble_y = y; return self(); }
         
+        // Phase 50: Advanced Styling
+        Derived& border(float width, internal::ColorF c) {
+            self().view_->border_width = width;
+            self().view_->border_color = c;
+            return self();
+        }
+        
+        Derived& glow(float strength, internal::ColorF c) {
+            self().view_->glow_strength = strength;
+            self().view_->glow_color = c;
+            return self();
+        }
+        
         // Font Size (Universal Masquerade)
         Derived& size(float s) { self().view_->font_size = s; return self(); }
         

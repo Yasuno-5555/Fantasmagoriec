@@ -32,7 +32,17 @@ namespace ui {
         DropTarget,
         TextArea,
         Splitter,
-        Bezier
+        Bezier,
+        // Phase 50: Specialized Widgets (From Rust Prototype)
+        Knob,
+        Fader,
+        Dragger,
+        Collapsible,
+        Toast,
+        Tooltip,
+        Node,
+        Socket,
+        Markdown
     };
 
     // --- Common View Header (POD) ---
@@ -58,6 +68,8 @@ namespace ui {
         bool is_row = false;    
         bool wrap = false;      
         Align align = Align::Stretch;  
+        bool is_absolute = false;
+        float left = 0, top = 0, right = 0, bottom = 0;
         
         // --- Universal Style Inputs ---
         internal::ColorF bg_color = {0, 0, 0, 0}; // Transparent by default
@@ -65,6 +77,13 @@ namespace ui {
         float border_radius = 0;
         float elevation = 0;
         bool is_squircle = false;
+        
+        float border_width = 0;
+        internal::ColorF border_color = {0,0,0,0};
+        
+        float glow_strength = 0;
+        internal::ColorF glow_color = {0,0,0,0};
+
         float backdrop_blur = 0;
         float wobble_x = 0;
         float wobble_y = 0;
@@ -251,6 +270,69 @@ namespace ui {
     struct BezierView : public ViewHeader {
         float p0[2], p1[2], p2[2], p3[2];
         float thickness;
+    };
+
+    // --- Phase 50: Specialized Widgets ---
+    struct KnobView : public ViewHeader {
+        float* value = nullptr;
+        float min = 0;
+        float max = 1.0f;
+        const char* label = nullptr;
+        internal::ColorF glow_color = {1,1,1,1};
+    };
+
+    struct FaderView : public ViewHeader {
+        float* value = nullptr;
+        float min = 0;
+        float max = 1.0f;
+        bool bipolar = false;
+        bool logarithmic = false;
+    };
+    
+    struct DraggerView : public ViewHeader {
+        float* value = nullptr;
+        float min = -10000.0f; 
+        float max = 10000.0f;
+        float step = 1.0f;
+        bool is_editing = false;
+        char edit_buffer[32] = {0}; 
+    };
+    
+    struct CollapsibleView : public BoxView {
+        bool* expanded = nullptr;
+        const char* label = nullptr;
+        float header_height = 24.0f;
+    };
+    
+    struct ToastView : public ViewHeader {
+        const char* message = nullptr;
+        float duration = 2.0f;
+    };
+
+    struct TooltipView : public ViewHeader {
+        const char* text = nullptr;
+    };
+
+    struct NodeView : public ViewHeader {
+        const char* title = nullptr;
+        float* pos_x = nullptr;
+        float* pos_y = nullptr;
+        bool selected = false;
+    };
+
+    struct SocketView : public ViewHeader {
+        const char* name = nullptr;
+        bool is_input = true;
+        internal::ColorF color = {0.8f, 0.8f, 0.8f, 1.0f};
+    };
+
+    struct MarkdownView : public ViewHeader {
+        const char* source = nullptr; // Markdown source text
+        internal::ColorF heading_color = {1.0f, 1.0f, 1.0f, 1.0f};
+        internal::ColorF text_color = {0.9f, 0.9f, 0.9f, 1.0f};
+        internal::ColorF link_color = {0.4f, 0.7f, 1.0f, 1.0f};
+        internal::ColorF code_bg = {0.15f, 0.15f, 0.2f, 1.0f};
+        float line_spacing = 1.4f;
     };
 
 } // namespace ui

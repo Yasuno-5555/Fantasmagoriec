@@ -62,6 +62,7 @@ set(CORE_SOURCES
 
     # Text Engine (Ported from Legacy)
     src/text/font_manager.cpp
+    src/text/markdown.cpp
 )
 
 include_directories(include)
@@ -74,6 +75,7 @@ add_executable(v5_demo demos/v5_demo.cpp ${CORE_SOURCES})
 add_executable(interactive_demo demos/interactive_demo.cpp ${CORE_SOURCES})
 add_executable(rich_demo demos/rich_demo.cpp ${CORE_SOURCES})
 add_executable(juice_demo demos/juice_demo.cpp ${CORE_SOURCES})
+add_executable(visual_demo demos/visual_demo.cpp ${CORE_SOURCES})
 
 if(WIN32)
     set(EXTRA_LIBS glfw freetype opengl32 user32 gdi32 shell32 ole32 uuid imm32)
@@ -85,6 +87,7 @@ target_link_libraries(v5_demo PRIVATE ${EXTRA_LIBS})
 target_link_libraries(interactive_demo PRIVATE ${EXTRA_LIBS})
 target_link_libraries(rich_demo PRIVATE ${EXTRA_LIBS})
 target_link_libraries(juice_demo PRIVATE ${EXTRA_LIBS})
+target_link_libraries(visual_demo PRIVATE ${EXTRA_LIBS})
 
 # Python Bindings
 pybind11_add_module(fanta src/python/binding.cpp ${CORE_SOURCES})

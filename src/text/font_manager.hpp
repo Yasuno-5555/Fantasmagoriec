@@ -33,8 +33,10 @@ namespace internal {
         
         // Generate SDF bitmap for a glyph
         // w, h are output dimensions. buffer is 8-bit alpha.
+        // out_off_x, out_off_y are bitmap placement offsets (bearing).
         bool generate_sdf(FontID font, uint32_t glyph_index, int sdf_size, 
-                          std::vector<uint8_t>& out_buffer, int& out_w, int& out_h);
+                          std::vector<uint8_t>& out_buffer, int& out_w, int& out_h,
+                          int& out_off_x, int& out_off_y);
 
         FT_Face get_face(FontID font);
 

@@ -29,6 +29,8 @@ namespace ui {
         for (ViewHeader* child = node->first_child; child; child = child->next_sibling) {
             MeasureRecursive(child);
             
+            if (child->is_absolute) continue;
+
             float child_w = child->measured_size.w + child->margin * 2;
             float child_h = child->measured_size.h + child->margin * 2;
             
@@ -264,6 +266,7 @@ namespace ui {
         int child_count = 0;
         
         for (ViewHeader* c = node->first_child; c; c = c->next_sibling) {
+            if (c->is_absolute) continue;
             child_count++;
             float c_main = node->is_row ? c->measured_size.w : c->measured_size.h;
             c_main += c->margin * 2;
@@ -281,6 +284,15 @@ namespace ui {
         float cursor = 0;
         
         for (ViewHeader* c = node->first_child; c; c = c->next_sibling) {
+            // Absolute Positioning Handling
+            if (c->is_absolute) {
+                // Arrange absolute child at its requested position
+                // Use measured size if width/height not set explicitly via builder?
+                // measured_size contains max of explicit and content.
+                ArrangeRecursive(c, c->left, c->top, c->measured_size.w, c->measured_size.h);
+                continue;
+            }
+
             float c_main, c_cross;
             float c_measured = node->is_row ? c->measured_size.w : c->measured_size.h;
             

@@ -13,8 +13,12 @@
 #include "core/utf8.hpp"
 #include <cstring>
 #include <cmath>
+#include <iomanip>
+#include <cstdio> // snprintf
 
 #include "view/transition_eval.hpp"
+#include "core/animation.hpp"
+#include "text/markdown.hpp"
 
 namespace fanta {
 namespace ui {
@@ -46,20 +50,21 @@ namespace ui {
 
         // --- 1. Universal Background rendering (Shadow, Blur, BG) ---
         // Every widget can have these now.
-        if (view->backdrop_blur > 0.0f) {
-            dl.add_blur_rect({rect.x, rect.y}, {rect.w, rect.h}, view->border_radius, view->backdrop_blur);
-        }
-
-        if (view->bg_color.a > 0 || view->elevation > 0) {
+        // Universal Background rendering (Shadow, Blur, BG)
+        // Combine Blur into RoundedRect for single-pass Glass effect
+        if (view->bg_color.a >= 0 || view->elevation > 0 || view->backdrop_blur > 0) {
             dl.add_rounded_rect(
                 {rect.x, rect.y},
                 {rect.w, rect.h},
                 view->border_radius,
                 view->bg_color,
                 view->elevation,
-                view->is_squircle, 
-                0.0f, 
-                {view->wobble_x, view->wobble_y}
+                view->is_squircle,
+                view->border_width,
+                view->border_color,
+                view->glow_strength,
+                view->glow_color,
+                view->backdrop_blur 
             );
         }
 
@@ -74,9 +79,9 @@ namespace ui {
                 while (*p) {
                     uint32_t codepoint = internal::NextUTF8(p);
                     auto [font_id, glyph_idx] = internal::FontManager::Get().get_glyph_index(codepoint);
-                    float u0, v0, u1, v1, gw, gh, adv;
-                    if (internal::GlyphCache::Get().get_glyph_uv(font_id, glyph_idx, u0, v0, u1, v1, gw, gh, adv)) {
-                        dl.add_text({pen_x, pen_y - gh * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, txt->fg_color);
+                    float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                    if (internal::GlyphCache::Get().get_glyph_uv(font_id, glyph_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                        dl.add_text({pen_x + ox * scale, pen_y - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, txt->fg_color);
                         pen_x += adv * scale;
                     }
                 }
@@ -92,7 +97,16 @@ namespace ui {
             internal::ColorF anim_bg = EvaluateTransitionColor(btn->id, bg);
             
             // Re-render button background with interactive color
-            dl.add_rounded_rect({rect.x, rect.y}, {rect.w, rect.h}, btn->border_radius, anim_bg, is_active ? 0.0f : btn->elevation, btn->is_squircle, 0.0f, {0, 0});
+            dl.add_rounded_rect(
+                {rect.x, rect.y}, {rect.w, rect.h}, 
+                btn->border_radius, anim_bg, 
+                is_active ? 0.0f : btn->elevation, 
+                btn->is_squircle, 
+                btn->border_width, 
+                btn->border_color, 
+                btn->glow_strength, 
+                btn->glow_color
+            );
             
             if (btn->label && btn->label[0] != '\0') {
                 float text_w = 0;
@@ -109,9 +123,9 @@ namespace ui {
                 while (*p) {
                     uint32_t codepoint = internal::NextUTF8(p);
                     auto [font_id, glyph_idx] = internal::FontManager::Get().get_glyph_index(codepoint);
-                    float u0, v0, u1, v1, gw, gh, adv;
-                    if (internal::GlyphCache::Get().get_glyph_uv(font_id, glyph_idx, u0, v0, u1, v1, gw, gh, adv)) {
-                        dl.add_text({pen_x, pen_y - gh * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, btn->fg_color);
+                    float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                    if (internal::GlyphCache::Get().get_glyph_uv(font_id, glyph_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                        dl.add_text({pen_x + ox * scale, pen_y - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, btn->fg_color);
                         pen_x += adv * scale;
                     }
                 }
@@ -139,9 +153,9 @@ namespace ui {
                 while (*p) {
                     uint32_t codepoint = internal::NextUTF8(p);
                     auto [font_id, glyph_idx] = internal::FontManager::Get().get_glyph_index(codepoint);
-                    float u0, v0, u1, v1, gw, gh, adv;
-                    if (internal::GlyphCache::Get().get_glyph_uv(font_id, glyph_idx, u0, v0, u1, v1, gw, gh, adv)) {
-                        dl.add_text({pen_x, pen_y - gh * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, text_color);
+                    float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                    if (internal::GlyphCache::Get().get_glyph_uv(font_id, glyph_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                        dl.add_text({pen_x + ox * scale, pen_y - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, text_color);
                         pen_x += adv * scale;
                     }
                 }
@@ -164,9 +178,9 @@ namespace ui {
                 for (const char* p = toggle->label; *p; ) {
                     uint32_t cp = internal::NextUTF8(p);
                     auto [f_id, g_idx] = internal::FontManager::Get().get_glyph_index(cp);
-                    float u0, v0, u1, v1, gw, gh, adv;
-                    if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv)) {
-                        dl.add_text({lx, ly - gh * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, toggle->fg_color);
+                    float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                    if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                        dl.add_text({lx + ox * scale, ly - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, toggle->fg_color);
                         lx += adv * scale;
                     }
                 }
@@ -197,6 +211,351 @@ namespace ui {
             return;
         }
 
+        // --- Phase 50: Specialized Widgets Rendering ---
+        
+        else if (view->type == ViewType::Knob) {
+            const auto* knob = static_cast<const KnobView*>(view);
+            float val = knob->value ? *knob->value : knob->min;
+            float t = (val - knob->min) / (knob->max - knob->min);
+            t = std::clamp(t, 0.0f, 1.0f);
+            
+            float cx = rect.x + rect.w * 0.5f;
+            float cy = rect.y + rect.h * 0.5f;
+            float r = std::min(rect.w, rect.h) * 0.4f;
+            
+            // Base Circle (Bg)
+            dl.add_circle({cx, cy}, r, {0.15f, 0.15f, 0.2f, 1.0f});
+            
+            // Indicator (Line)
+            // Angle range: -225 deg to -45 deg (270 degree span, pointing down-left to down-right)
+            // 0 -> -225deg, 1 -> +45deg? No, usually start at 7 o'clock, end at 5 o'clock
+            // 7 o'clock = 270 - 45 = 225 deg? No.
+            // Let's say: Start = 135 deg (bottom-left), End = 405 deg (bottom-right)?
+            // Standard audio knob: -150 to +150 degrees from UP?
+            // Let's compute in radians.
+            // -150 deg = -2.61 rad
+            // +150 deg = +2.61 rad
+            
+            float angle_start = 0.75f * 3.14159f; // 135 deg
+            float angle_end = 2.25f * 3.14159f;   // 405 deg
+            float angle = angle_start + t * (angle_end - angle_start);
+            
+            float ix = cx + std::cos(angle) * (r * 0.8f);
+            float iy = cy + std::sin(angle) * (r * 0.8f);
+            
+            // Glow/Bloom Circle
+            if (knob->glow_color.a > 0) {
+                 // Simple bloom simulation by circle? Or backend handles bloom?
+                 // We just draw the indicator with glow color
+                 dl.add_line({cx, cy}, {ix, iy}, 4.0f, knob->glow_color);
+                 dl.add_circle({ix, iy}, 4.0f, knob->glow_color);
+            } else {
+                 dl.add_line({cx, cy}, {ix, iy}, 4.0f, {0.9f, 0.9f, 1.0f, 1.0f});
+            }
+            
+            // Label
+            if (knob->label) {
+                // ... Label rendering reusing common logic if possible, or specialized ...
+                // For now minimal implementation
+            }
+        }
+
+        else if (view->type == ViewType::Fader) {
+            const auto* fader = static_cast<const FaderView*>(view);
+            float val = fader->value ? *fader->value : fader->min;
+            float t = (val - fader->min) / (fader->max - fader->min);
+            t = std::clamp(t, 0.0f, 1.0f);
+
+            // Track
+            float track_w = 4.0f;
+            float track_x = rect.x + (rect.w - track_w) * 0.5f;
+            dl.add_rounded_rect({track_x, rect.y}, {track_w, rect.h}, 2.0f, {0.1f, 0.1f, 0.12f, 1.0f});
+            
+            // Thumb (Handle)
+            float thumb_h = 30.0f;
+            float thumb_w = rect.w * 0.8f;
+            float thumb_x = rect.x + (rect.w - thumb_w) * 0.5f;
+            // Cartesion: 0 at bottom
+            float avail_h = rect.h - thumb_h;
+            float thumb_y = rect.y + avail_h * (1.0f - t); 
+            
+            dl.add_rounded_rect({thumb_x, thumb_y}, {thumb_w, thumb_h}, 4.0f, {0.15f, 0.15f, 0.18f, 1.0f}, 4.0f); // Shadow
+            dl.add_rounded_rect({thumb_x, thumb_y}, {thumb_w, thumb_h}, 4.0f, {0.6f, 0.6f, 0.65f, 1.0f}); // Body
+            
+            // Center line on thumb
+            dl.add_line({thumb_x, thumb_y + thumb_h*0.5f}, {thumb_x+thumb_w, thumb_y + thumb_h*0.5f}, 2.0f, {0.2f,0.2f,0.2f,1.0f});
+        }
+        
+        else if (view->type == ViewType::Dragger) {
+            const auto* dragger = static_cast<const DraggerView*>(view);
+            float val = dragger->value ? *dragger->value : 0;
+            
+            // Background
+            dl.add_rounded_rect({rect.x, rect.y}, {rect.w, rect.h}, 4.0f, {0.2f, 0.2f, 0.25f, 1.0f});
+            if (interaction::IsActive(dragger->id)) {
+                 dl.add_rounded_rect({rect.x, rect.y}, {rect.w, rect.h}, 4.0f, {0.3f, 0.3f, 0.35f, 1.0f}); // Active highlight
+            }
+            
+            // Text Value
+            char buf[64];
+            snprintf(buf, 64, "%.2f", val);
+            
+             float scale = 14.0f / (float)internal::FontManager::BASE_SDF_SIZE;
+             float lx = rect.x + 8; float ly = rect.y + (rect.h + 14.0f * 0.6f) * 0.5f;
+             for (const char* p = buf; *p; ) {
+                 uint32_t cp = internal::NextUTF8(p);
+                 auto [f_id, g_idx] = internal::FontManager::Get().get_glyph_index(cp);
+                 float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                 if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                     dl.add_text({lx + ox * scale, ly - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, {1,1,1,1});
+                     lx += adv * scale;
+                 }
+             }
+        }
+        
+        else if (view->type == ViewType::Collapsible) {
+            const auto* col = static_cast<const CollapsibleView*>(view);
+            bool expanded = col->expanded ? *col->expanded : false;
+            
+            // Header
+            internal::Vec2 header_pos = {rect.x, rect.y};
+            internal::Vec2 header_size = {rect.w, col->header_height};
+            
+            dl.add_rounded_rect(header_pos, header_size, 4.0f, {0.25f, 0.25f, 0.3f, 1.0f});
+            
+            // Icon (Triangle)
+            float icon_size = 10.0f;
+            float icon_x = rect.x + 8;
+            float icon_y = rect.y + (col->header_height - icon_size) * 0.5f;
+            
+            internal::Path path;
+            path.is_fill = true;
+            path.color = {0.8f, 0.8f, 0.8f, 1.0f};
+            if (expanded) {
+                // Down pointing
+                path.points.push_back({internal::PathVerb::MoveTo, {icon_x, icon_y + icon_size*0.25f}});
+                path.points.push_back({internal::PathVerb::LineTo, {icon_x + icon_size, icon_y + icon_size*0.25f}});
+                path.points.push_back({internal::PathVerb::LineTo, {icon_x + icon_size*0.5f, icon_y + icon_size*0.75f}});
+            } else {
+                // Right pointing
+                path.points.push_back({internal::PathVerb::MoveTo, {icon_x + icon_size*0.25f, icon_y}});
+                path.points.push_back({internal::PathVerb::LineTo, {icon_x + icon_size*0.75f, icon_y + icon_size*0.5f}});
+                path.points.push_back({internal::PathVerb::LineTo, {icon_x + icon_size*0.25f, icon_y + icon_size}});
+            }
+            path.points.push_back({internal::PathVerb::Close});
+            dl.add_path(path); // Requires add_path in DrawList
+            
+            if (col->label) {
+                 float scale = 14.0f / (float)internal::FontManager::BASE_SDF_SIZE;
+                 float lx = icon_x + icon_size + 8; float ly = rect.y + (col->header_height + 14.0f * 0.6f) * 0.5f;
+                 for (const char* p = col->label; *p; ) {
+                     uint32_t cp = internal::NextUTF8(p);
+                     auto [f_id, g_idx] = internal::FontManager::Get().get_glyph_index(cp);
+                     float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                     if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                         dl.add_text({lx + ox * scale, ly - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, {1,1,1,1});
+                         lx += adv * scale;
+                     }
+                 }
+            }
+        }
+        
+        else if (view->type == ViewType::Toast) {
+             const auto* toast = static_cast<const ToastView*>(view);
+             // Render floating pill
+             dl.add_rounded_rect({rect.x, rect.y}, {rect.w, rect.h}, 20.0f, {0.1f, 0.1f, 0.1f, 0.9f}, 4.0f);
+             if (toast->message) {
+                 // Text rendering...
+                 float scale = 14.0f / (float)internal::FontManager::BASE_SDF_SIZE;
+                 float lx = rect.x + 16; float ly = rect.y + (rect.h + 14.0f * 0.6f) * 0.5f;
+                 for (const char* p = toast->message; *p; ) {
+                     uint32_t cp = internal::NextUTF8(p);
+                     auto [f_id, g_idx] = internal::FontManager::Get().get_glyph_index(cp);
+                     float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                     if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                         dl.add_text({lx + ox * scale, ly - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, {1,1,1,1});
+                         lx += adv * scale;
+                     }
+                 }
+             }
+        }
+        
+        else if (view->type == ViewType::Tooltip) {
+             const auto* tt = static_cast<const TooltipView*>(view);
+             dl.add_rounded_rect({rect.x, rect.y}, {rect.w, rect.h}, 4.0f, {0,0,0,0.8f});
+             // Text...
+             if (tt->text) {
+                 float scale = 12.0f / (float)internal::FontManager::BASE_SDF_SIZE;
+                 float lx = rect.x + 4; float ly = rect.y + (rect.h + 12.0f * 0.6f) * 0.5f;
+                 for (const char* p = tt->text; *p; ) {
+                     uint32_t cp = internal::NextUTF8(p);
+                     auto [f_id, g_idx] = internal::FontManager::Get().get_glyph_index(cp);
+                     float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                     if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                         dl.add_text({lx + ox * scale, ly - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, {1,1,1,1});
+                         lx += adv * scale;
+                     }
+                 }
+             }
+        }
+        
+        else if (view->type == ViewType::Node) {
+            const auto* node = static_cast<const NodeView*>(view);
+            // Main Box
+            dl.add_rounded_rect({rect.x, rect.y}, {rect.w, rect.h}, 8.0f, {0.18f, 0.18f, 0.2f, 0.95f}, 8.0f); // Shadow
+            
+            // Selection Border
+            if (interaction::IsActive(node->id) || node->selected) {
+                 dl.add_rounded_rect({rect.x-1, rect.y-1}, {rect.w+2, rect.h+2}, 9.0f, {0.9f, 0.6f, 0.2f, 0.5f});
+            }
+
+            // Title Header
+            float header_h = 24.0f;
+            dl.add_rounded_rect({rect.x, rect.y}, {rect.w, header_h}, 8.0f, {0.25f, 0.25f, 0.28f, 1.0f}); // Background
+            // Flatten bottom corners of header? Requires path or clip. For now just draw over body.
+            
+            // Title Text
+            if (node->title) {
+                 float scale = 14.0f / (float)internal::FontManager::BASE_SDF_SIZE;
+                 float lx = rect.x + 8; float ly = rect.y + (header_h + 14.0f * 0.6f) * 0.5f;
+                 for (const char* p = node->title; *p; ) {
+                     uint32_t cp = internal::NextUTF8(p);
+                     auto [f_id, g_idx] = internal::FontManager::Get().get_glyph_index(cp);
+                     float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                     if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                         dl.add_text({lx + ox * scale, ly - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, {1,1,1,1});
+                         lx += adv * scale;
+                     }
+                 }
+            }
+        }
+        
+        else if (view->type == ViewType::Socket) {
+             const auto* sock = static_cast<const SocketView*>(view);
+             
+             float r = 6.0f;
+             float cy = rect.y + rect.h * 0.5f;
+             float cx = sock->is_input ? rect.x + r + 4 : rect.x + rect.w - r - 4;
+             
+             dl.add_circle({cx, cy}, r, sock->color);
+             dl.add_circle({cx, cy}, r * 0.6f, {0.1f, 0.1f, 0.1f, 1.0f}); // Hole
+             
+             // Label
+             if (sock->name) {
+                 float scale = 12.0f / (float)internal::FontManager::BASE_SDF_SIZE;
+                 float lx = sock->is_input ? cx + r + 6 : rect.x + rect.w - r - 6 - (strlen(sock->name)*7.0f); // Approx right align
+                 // Simple left align for input, rightish for output?
+                 if (!sock->is_input) lx = rect.x + rect.w - r - 8 - 40; // Hack offset for now
+                 
+                 float ly = rect.y + (rect.h + 12.0f * 0.6f) * 0.5f;
+                 // Actually standard loop...
+                 lx = sock->is_input ? cx + r + 8 : rect.x + rect.w - r - 8 - 50; // Just push it left
+                 
+                  for (const char* p = sock->name; *p; ) {
+                     uint32_t cp = internal::NextUTF8(p);
+                     auto [f_id, g_idx] = internal::FontManager::Get().get_glyph_index(cp);
+                     float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                     if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                         dl.add_text({lx + ox * scale, ly - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, {0.8f,0.8f,0.8f,1});
+                         lx += adv * scale;
+                     }
+                 }
+             }
+        }
+
+        else if (view->type == ViewType::Markdown) {
+            const auto* md = static_cast<const MarkdownView*>(view);
+            if (md->source) {
+                // Parse markdown
+                markdown::MarkdownParser parser;
+                markdown::MarkdownDocument doc = parser.parse(md->source);
+                
+                float pen_y = rect.y + 4;
+                float line_h = 16.0f * md->line_spacing;
+                
+                for (const auto& block : doc.blocks) {
+                    if (block.type == markdown::BlockType::Empty) {
+                        pen_y += line_h * 0.5f;
+                        continue;
+                    }
+                    
+                    if (block.type == markdown::BlockType::HorizontalRule) {
+                        dl.add_rounded_rect({rect.x, pen_y + 4}, {rect.w - 20, 2.0f}, 1.0f, {0.5f, 0.5f, 0.5f, 0.5f});
+                        pen_y += line_h;
+                        continue;
+                    }
+                    
+                    // Determine font size and color
+                    float font_size = markdown::get_font_size(block.type);
+                    internal::ColorF text_col = markdown::is_heading(block.type) ? md->heading_color : md->text_color;
+                    float scale = font_size / (float)internal::FontManager::BASE_SDF_SIZE;
+                    
+                    // Calculate indent
+                    float indent = block.indent_level * 20.0f;
+                    if (block.type == markdown::BlockType::BulletList || block.type == markdown::BlockType::NumberedList) {
+                        indent += 15.0f;
+                    }
+                    
+                    // Draw bullet point
+                    if (block.type == markdown::BlockType::BulletList) {
+                        dl.add_circle({rect.x + indent - 10, pen_y + font_size * 0.5f}, 3.0f, md->text_color);
+                    }
+                    
+                    // Code block background
+                    if (block.type == markdown::BlockType::CodeBlock) {
+                        // Simple estimate for code block height
+                        int lines = 1;
+                        for (const auto& span : block.spans) {
+                            for (char c : span.text) if (c == '\n') lines++;
+                        }
+                        float code_h = lines * (font_size * 1.2f) + 16;
+                        dl.add_rounded_rect({rect.x + 4, pen_y}, {rect.w - 28, code_h}, 4.0f, md->code_bg);
+                        indent += 10;
+                    }
+                    
+                    // Draw spans
+                    float pen_x = rect.x + indent;
+                    float baseline_y = pen_y + font_size * 0.8f;
+                    
+                    for (const auto& span : block.spans) {
+                        internal::ColorF span_col = text_col;
+                        if ((static_cast<uint8_t>(span.style) & static_cast<uint8_t>(markdown::InlineStyle::Link)) != 0) {
+                            span_col = md->link_color;
+                        }
+                        if ((static_cast<uint8_t>(span.style) & static_cast<uint8_t>(markdown::InlineStyle::Code)) != 0) {
+                            // Draw inline code bg
+                            // Approximate width... simple hack
+                            float approx_w = span.text.size() * font_size * 0.6f;
+                            dl.add_rounded_rect({pen_x - 2, pen_y}, {approx_w + 4, font_size + 4}, 3.0f, md->code_bg);
+                        }
+                        
+                        const char* p = span.text.c_str();
+                        while (*p) {
+                            // Handle newlines in code blocks
+                            if (*p == '\n') {
+                                p++;
+                                pen_x = rect.x + indent;
+                                baseline_y += font_size * 1.2f;
+                                continue;
+                            }
+                            
+                            uint32_t cp = internal::NextUTF8(p);
+                            auto [f_id, g_idx] = internal::FontManager::Get().get_glyph_index(cp);
+                            float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                            if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                                dl.add_text({pen_x + ox * scale, baseline_y - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, span_col);
+                                pen_x += adv * scale;
+                            }
+                        }
+                    }
+                    
+                    pen_y += line_h;
+                    if (markdown::is_heading(block.type)) pen_y += font_size * 0.3f; // Extra spacing after headings
+                    if (block.type == markdown::BlockType::CodeBlock) pen_y += 20; // Extra padding
+                }
+            }
+        }
+
         // --- 3. Default Child Recursion ---
         for (ViewHeader* child = view->first_child; child; child = child->next_sibling) {
             RenderViewRecursive(child, dl, depth + 1);
@@ -224,9 +583,9 @@ namespace ui {
                     const char* p = cmd.label.c_str();
                     while (*p) {
                         uint32_t cp = internal::NextUTF8(p); auto [f_id, g_idx] = internal::FontManager::Get().get_glyph_index(cp);
-                        float u0, v0, u1, v1, gw, gh, adv;
-                        if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv)) {
-                             dl.add_text({pen_x, pen_y - gh * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, {0, 1, 0, 1});
+                        float u0, v0, u1, v1, gw, gh, adv, ox, oy;
+                        if (internal::GlyphCache::Get().get_glyph_uv(f_id, g_idx, u0, v0, u1, v1, gw, gh, adv, ox, oy)) {
+                             dl.add_text({pen_x + ox * scale, pen_y - oy * scale}, {gw * scale, gh * scale}, {u0, v0, u1, v1}, {0, 1, 0, 1});
                              pen_x += adv * scale;
                         }
                     }

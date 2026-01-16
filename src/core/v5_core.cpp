@@ -34,7 +34,7 @@ struct Node {
 static_assert(std::is_trivially_destructible_v<Node>, "Node must be trivially destructible for FrameArena!");
 
 // Forward declaration
-std::unique_ptr<Backend> CreateOpenGLMinimalBackend();
+std::unique_ptr<Backend> CreateOpenGLBackend();
 
 // Global Engine Context
 static internal::EngineContext g_engine_ctx;
@@ -57,12 +57,12 @@ namespace internal {
 // --- Public API ---
 
 void Init(int width, int height, const char* title) {
-    internal::Log("Init V5 Minimal");
+    internal::Log("Init V5 Standard");
     
     g_ctx.runtime.width = width;
     g_ctx.runtime.height = height;
     
-    g_ctx.world.backend = CreateOpenGLMinimalBackend();
+    g_ctx.world.backend = CreateOpenGLBackend();
     if (!g_ctx.world.backend->init(width, height, title)) {
         internal::Log("Backend init failed!");
         exit(1);

@@ -26,7 +26,8 @@ namespace internal {
         // Retrieve UVs for a glyph. Generates/Updates atlas if missing.
         bool get_glyph_uv(FontID font, uint32_t glyph_index, 
                           float& u0, float& v0, float& u1, float& v1,
-                          float& glyph_w, float& glyph_h, float& glyph_advance) {
+                          float& glyph_w, float& glyph_h, float& glyph_advance,
+                          float& off_x, float& off_y) {
             
             CacheKey key = { font, glyph_index };
             auto it = m_cache.find(key);
@@ -38,14 +39,17 @@ namespace internal {
                 glyph_w = g.px_w;
                 glyph_h = g.px_h;
                 glyph_advance = g.px_adv;
+                off_x = g.off_x;
+                off_y = g.off_y;
                 return true;
             }
             
             // Not in cache, generate
             std::vector<uint8_t> sdf_buffer;
             int w, h;
+            int ox, oy;
             
-            if (!FontManager::Get().generate_sdf(font, glyph_index, SDF_SIZE, sdf_buffer, w, h)) {
+            if (!FontManager::Get().generate_sdf(font, glyph_index, SDF_SIZE, sdf_buffer, w, h, ox, oy)) {
                 return false;
             }
             
@@ -86,6 +90,9 @@ namespace internal {
             g.u1 = (float)(x + w) / ATLAS_WIDTH;
             g.v1 = (float)(y + h) / ATLAS_HEIGHT;
             
+            g.off_x = (float)ox;
+            g.off_y = (float)oy;
+
             m_cache[key] = g;
             
             u0 = g.u0; v0 = g.v0;
@@ -93,6 +100,8 @@ namespace internal {
             glyph_w = g.px_w;
             glyph_h = g.px_h;
             glyph_advance = g.px_adv;
+            off_x = g.off_x;
+            off_y = g.off_y;
             
             return true;
         }
@@ -135,6 +144,7 @@ namespace internal {
         struct CachedGlyph {
             float u0, v0, u1, v1;
             float px_w, px_h, px_adv;
+            float off_x, off_y; // Bitmap offsets from origin
         };
         
         std::map<CacheKey, CachedGlyph> m_cache;

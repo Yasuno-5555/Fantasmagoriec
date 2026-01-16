@@ -113,6 +113,56 @@ namespace fanta {
         using ViewBuilder::ViewBuilder;
         SplitterConfig& vertical(bool v = true) { view_->is_vertical = v; return *this; }
     };
+
+    struct KnobConfig : public ViewBuilder<KnobView, KnobConfig> {
+        using ViewBuilder::ViewBuilder;
+        KnobConfig& range(float min, float max) { view_->min = min; view_->max = max; return *this; }
+        KnobConfig& color(internal::ColorF c) { view_->glow_color = c; view_->fg_color = c; return *this; }
+    };
+
+    struct FaderConfig : public ViewBuilder<FaderView, FaderConfig> {
+        using ViewBuilder::ViewBuilder;
+        FaderConfig& range(float min, float max) { view_->min = min; view_->max = max; return *this; }
+        FaderConfig& bipolar(bool enable = true) { view_->bipolar = enable; return *this; }
+        FaderConfig& logarithmic(bool enable = true) { view_->logarithmic = enable; return *this; }
+    };
+
+    struct DraggerConfig : public ViewBuilder<DraggerView, DraggerConfig> {
+        using ViewBuilder::ViewBuilder;
+        DraggerConfig& range(float min, float max) { view_->min = min; view_->max = max; return *this; }
+        DraggerConfig& step(float s) { view_->step = s; return *this; }
+    };
+
+    struct CollapsibleConfig : public ViewBuilder<CollapsibleView, CollapsibleConfig> {
+        using ViewBuilder::ViewBuilder;
+        operator bool() const { return view_->expanded && *view_->expanded; }
+    };
+    
+    struct ToastConfig : public ViewBuilder<ToastView, ToastConfig> {
+        using ViewBuilder::ViewBuilder;
+        ToastConfig& duration(float s) { view_->duration = s; return *this; }
+    };
+
+    struct TooltipConfig : public ViewBuilder<TooltipView, TooltipConfig> {
+        using ViewBuilder::ViewBuilder;
+    };
+    
+    struct NodeConfig : public ViewBuilder<NodeView, NodeConfig> {
+        using ViewBuilder::ViewBuilder;
+    };
+
+    struct SocketConfig : public ViewBuilder<SocketView, SocketConfig> {
+        using ViewBuilder::ViewBuilder;
+    };
+
+    struct MarkdownConfig : public ViewBuilder<MarkdownView, MarkdownConfig> {
+        using ViewBuilder::ViewBuilder;
+        MarkdownConfig& heading_color(internal::ColorF c) { view_->heading_color = c; return *this; }
+        MarkdownConfig& text_color(internal::ColorF c) { view_->text_color = c; return *this; }
+        MarkdownConfig& link_color(internal::ColorF c) { view_->link_color = c; return *this; }
+        MarkdownConfig& code_bg(internal::ColorF c) { view_->code_bg = c; return *this; }
+        MarkdownConfig& line_spacing(float s) { view_->line_spacing = s; return *this; }
+    };
     
     struct TreeNodeConfig : public ViewBuilder<TreeNodeView, TreeNodeConfig> {
         using ViewBuilder::ViewBuilder;
@@ -196,6 +246,18 @@ namespace fanta {
     void EndDragSource();
     DropTargetConfig BeginDropTarget(const char* accept_type);
     bool EndDropTarget(void** out_data = nullptr);
+
+    KnobConfig Knob(const char* label, float& value, float min=0, float max=100);
+    FaderConfig Fader(float& value, float min=0, float max=100);
+    DraggerConfig Dragger(float& value, float step=1.0f);
+    CollapsibleConfig Collapsible(const char* label, bool& expanded);
+    
+    ToastConfig Toast(const char* message);
+    TooltipConfig Tooltip(const char* text);
+    
+    NodeConfig Node(const char* title, float& x, float& y);
+    SocketConfig Socket(const char* name, bool is_input);
+    MarkdownConfig Markdown(const char* source);
 
     void SetKeyboardNav(bool enable);
     bool IsKeyboardNavActive();

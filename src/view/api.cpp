@@ -5,7 +5,7 @@
 
 namespace fanta {
 namespace ui {
-
+    namespace interaction = fanta::interaction; // Fix lookup
     // --- Internal Helpers ---
     namespace {
         internal::EngineContext& GetCtx() {
@@ -393,8 +393,198 @@ namespace ui {
         return false;
     }
 
+    // --- Phase 50: Specialized Widgets Implementation (From Rust Prototype) ---
+
+    KnobConfig Knob(const char* label, float& value, float min, float max) {
+        auto* view = AllocView<KnobView>(ViewType::Knob);
+        view->label = AllocString(label);
+        view->value = &value;
+        view->min = min;
+        view->max = max;
+        // Default Size
+        view->width = 60; view->height = 80;
+
+        auto& ctx = GetCtx();
+        auto rect = ctx.persistent.get_rect(view->id);
+        interaction::UpdateHitTest(view->id, rect.x, rect.y, rect.w, rect.h);
+        
+        if (interaction::IsActive(view->id)) {
+            // // interaction::RequestCursor(nullptr); // Hidden cursor
+            float dy = ctx.input.mouse_dy;
+            if (dy != 0) {
+                float range = max - min;
+                // Modifiers not yet implemented in V5 InputContext
+                // bool shift = (ctx.input.modifiers & 1); 
+                float sensitivity = 0.2f; // Default intermediate sensitivity
+                // Drag UP (negative dy) -> Increase value
+                float delta = -dy * (range / 200.0f) * sensitivity;
+                value = std::clamp(value + delta, min, max);
+            }
+        }
+        return KnobConfig(view);
+    }
+
+    FaderConfig Fader(float& value, float min, float max) {
+        auto* view = AllocView<FaderView>(ViewType::Fader);
+        view->value = &value;
+        view->min = min; view->max = max;
+        view->width = 40; view->height = 150; // Default vertical size
+
+        auto& ctx = GetCtx();
+        auto rect = ctx.persistent.get_rect(view->id);
+        interaction::UpdateHitTest(view->id, rect.x, rect.y, rect.w, rect.h);
+
+        if (interaction::IsActive(view->id)) {
+            float dy = ctx.input.mouse_dy;
+            if (dy != 0) {
+                float range = max - min;
+                float sensitivity = 1.0f;
+                // Fader is vertical: Drag UP -> Increase
+                float h = std::max(10.0f, rect.h);
+                float delta = -dy * (range / h) * sensitivity;
+                value = std::clamp(value + delta, min, max);
+            }
+        }
+        return FaderConfig(view);
+    }
+
+    DraggerConfig Dragger(float& value, float step) {
+        auto* view = AllocView<DraggerView>(ViewType::Dragger);
+        view->value = &value;
+        view->step = step;
+        view->width = 80; view->height = 24;
+
+        auto& ctx = GetCtx();
+        auto rect = ctx.persistent.get_rect(view->id);
+        interaction::UpdateHitTest(view->id, rect.x, rect.y, rect.w, rect.h);
+
+        if (view->is_editing) {
+            // TODO: Handle text input (requires persistent state for editing mode)
+            // For now, simple fallback or we need to store editing state in persistent storage?
+            // "view" is transient...
+        } else {
+            if (interaction::IsActive(view->id)) {
+                 // interaction::RequestCursor(nullptr);
+                 float dx = ctx.input.mouse_dx;
+                 if (dx != 0) {
+                     float sensitivity = 1.0f;
+                     float delta = dx * step * sensitivity; // Step per pixel? Maybe too fast.
+                     value += delta * 0.5f;
+                     value = std::clamp(value, view->min, view->max);
+                 }
+            }
+        }
+        return DraggerConfig(view);
+    }
+
+
+
+    CollapsibleConfig Collapsible(const char* label, bool& expanded) {
+        auto* view = AllocView<CollapsibleView>(ViewType::Collapsible);
+        view->label = AllocString(label);
+        view->expanded = &expanded;
+        view->is_row = false; // Container is a column
+        
+        auto& ctx = GetCtx();
+        // Hit test only the header!
+        // We'll need layout to know header rect, but for now we assume header is top part?
+        // Or we treat the view itself as the container, and the header interaction is handled.
+        
+        // Use last frame rect for interaction check
+        auto rect = ctx.persistent.get_rect(view->id);
+        // Header is top view->header_height
+        interaction::UpdateHitTest(view->id, rect.x, rect.y, rect.w, view->header_height);
+        
+        if (interaction::IsClicked(view->id)) {
+            expanded = !expanded;
+        }
+
+        if (expanded) {
+            PushParent(view); // Children go inside
+        }
+        
+        return CollapsibleConfig(view);
+    }
+
+    ToastConfig Toast(const char* message) {
+        auto* view = AllocView<ToastView>(ViewType::Toast);
+        view->message = AllocString(message);
+        // Toasts are usually overlays, so they might not respect layout flow?
+        // But for now, let's put them in the tree. Renderer can draw them as absolute overlay if needed.
+        view->is_absolute = true; 
+        // Actually, Toast usually goes into a specific overlay layer.
+        // We will just let it sit in the tree but render it on top?
+        // Or maybe Toast() shouldn't be a widget in the tree but a command?
+        // The API suggests it's a widget here.
+        return ToastConfig(view);
+    }
+
+    TooltipConfig Tooltip(const char* text) {
+        auto* view = AllocView<TooltipView>(ViewType::Tooltip);
+        view->text = AllocString(text);
+        // Tooltip logic usually binds to the *previous* widget.
+        // But here it's a standalone builder.
+        // Maybe it should be `.tooltip()` on ViewBuilder?
+        // For now, standalone widget that renders if parent is hovered?
+        return TooltipConfig(view);
+    }
+
+    NodeConfig Node(const char* title, float& x, float& y) {
+        auto* view = AllocView<NodeView>(ViewType::Node);
+        view->title = AllocString(title);
+        view->pos_x = &x;
+        view->pos_y = &y;
+        view->is_absolute = true;
+        view->left = x; view->top = y;
+        view->width = 150; // Default width
+        // user should use .height() or .prop() to fill
+
+        auto& ctx = GetCtx();
+        auto rect = ctx.persistent.get_rect(view->id);
+        interaction::UpdateHitTest(view->id, rect.x, rect.y, rect.w, rect.h);
+        
+        if (interaction::IsActive(view->id)) {
+             // interaction::RequestCursor(nullptr); // Move cursor?
+             float dx = ctx.input.mouse_dx;
+             float dy = ctx.input.mouse_dy;
+             x += dx;
+             y += dy;
+             // Update immediate position for this frame
+             view->left = x;
+             view->top = y;
+        }
+        
+        // Push parent? Usually Nodes contain Sockets.
+        // Yes, default to being a container
+        PushParent(view); 
+        
+        return NodeConfig(view);
+    }
+
+    SocketConfig Socket(const char* name, bool is_input) {
+        auto* view = AllocView<SocketView>(ViewType::Socket);
+        view->name = AllocString(name);
+        view->is_input = is_input;
+        view->height = 20; // Default height for socket row
+        
+        // Sockets are usually rows in the node?
+        // Let's assume user puts them in layout.
+        
+        // Interaction: Wire drag
+        // For now, just click detection
+        return SocketConfig(view);
+    }
+
     void SetKeyboardNav(bool enable) { GetCtx().runtime.keyboard_nav_enabled = enable; }
     bool IsKeyboardNavActive() { return GetCtx().runtime.keyboard_nav_enabled; }
+
+    MarkdownConfig Markdown(const char* source) {
+        auto* view = AllocView<MarkdownView>(ViewType::Markdown);
+        view->source = AllocString(source);
+        // Default sizing: auto-height, fill width
+        view->flex_grow = 1;
+        return MarkdownConfig(view);
+    }
 
 } // namespace ui
 } // namespace fanta

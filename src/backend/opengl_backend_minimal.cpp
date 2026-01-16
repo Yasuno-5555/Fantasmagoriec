@@ -391,7 +391,7 @@ void main() {
                 glUniform4f(ui_unifs.color, cmd.rounded_rect.color_r, cmd.rounded_rect.color_g, cmd.rounded_rect.color_b, cmd.rounded_rect.color_a);
                 glUniform1f(ui_unifs.radius, cmd.rounded_rect.radius);
                 glUniform1i(ui_unifs.is_sq, cmd.rounded_rect.is_squircle ? 1 : 0);
-                glUniform2f(ui_unifs.wobble, cmd.rounded_rect.wobble_x, cmd.rounded_rect.wobble_y);
+                glUniform2f(ui_unifs.wobble, 0.0f, 0.0f); // Wobble removed from DrawCmd
                 glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
             }
             else if (cmd.type == internal::DrawCmdType::Glyph) {
